@@ -1,0 +1,56 @@
+# Sensor simulation parameters and rates
+
+sample_rates_hz:
+  ground_truth: 100.0
+  wheel_encoders: 50.0
+  gyroscope: 50.0
+  compass: 10.0
+  gnss: 1.0
+  lidar: 5.0
+  ultrasonic: 10.0
+
+gnss:
+  enabled: true
+  horizontal_std_m: 0.50
+  bias_drift_std_m_per_s: 0.005
+  dropout_prob: 0.0
+  lever_arm_m: [0.05, 0.0]  # [x_forward, y_left] relative to robot origin
+  outage_intervals: []      # [[start_s, end_s], ...]
+
+cmps12:
+  heading_std_rad: 0.0175   # ~1.0 degree
+  calibration_state: 3      # 0 to 3 (3 = fully calibrated)
+  magnetic_declination_rad: 0.0
+  disturbance_bias_rad: 0.0
+
+mpu9250:
+  gyro_noise_std_rad_per_s: 0.005 # ~0.28 deg/s
+  gyro_bias_initial_rad_per_s: 0.015 # ~0.86 deg/s
+  gyro_bias_walk_std_rad_per_s_sqrt_s: 0.0001
+  accel_noise_std_m_per_s2: 0.05
+
+lidar:
+  enabled: false
+  max_range_m: 12.0
+  min_range_m: 0.15
+  fov_rad: 6.28318530718   # 360 deg
+  range_std_m: 0.03
+  bearing_std_rad: 0.015
+  mounting_offset_m: [0.20, 0.0]
+
+ultrasonic:
+  enabled: false
+  max_range_m: 3.5
+  min_range_m: 0.04
+  beam_angle_rad: 0.2618   # 15 degrees
+  range_std_m: 0.02
+  sensors:
+    front_center:
+      offset_m: [0.275, 0.0]
+      yaw_offset_rad: 0.0
+    front_left:
+      offset_m: [0.275, 0.18]
+      yaw_offset_rad: 0.5236  # +30 deg
+    front_right:
+      offset_m: [0.275, -0.18]
+      yaw_offset_rad: -0.5236 # -30 deg

@@ -1,0 +1,23 @@
+{
+  "title": "Four-Wheel Robot Localization with EKF-Based Multi-Sensor Fusion",
+  "resolution": "1920x1080",
+  "aspect_ratio": "16:9",
+  "fps": 30,
+  "duration_seconds": 30.0,
+  "total_frames": 900,
+  "codec": "H.264 (libx264)",
+  "pixel_format": "yuv420p",
+  "panels": [
+    "Simulated Robot Environment with 4 visible wheels and Ground Truth vs Fusion Trajectory",
+    "Real-time sensor telemetry dashboard (Encoders, IMU, Compass, GNSS status)",
+    "Dynamic localization error history timeline with shaded GNSS outage window"
+  ],
+  "demonstrated_sequences": [
+    "Sequence A: Normal motion with all sensors active",
+    "Sequence B: Differential steering turning maneuver",
+    "Sequence C: Asymmetric wheel slip injection (left wheels slipping 30%)",
+    "Sequence D: Contiguous 20-second GNSS blackout with uncertainty propagation",
+    "Sequence E: GNSS fix restoration with rapid Kalman convergence",
+    "Sequence F: Online gyroscope bias estimation and compensation"
+  ]
+}

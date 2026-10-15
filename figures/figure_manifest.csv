@@ -1,0 +1,19 @@
+id,name,description
+F01,f01_robot_architecture,Four-wheel mobile robot architecture schematic
+F02,f02_sensor_fusion_pipeline,Multi-sensor EKF fusion block diagram
+F03,f03_wheel_encoder_measurements,Synchronized 4-wheel encoder traces under slip
+F04,f04_odometry_drift,Odometry trajectory drift comparison
+F05,f05_progressive_sensor_fusion,"Progressive sensor fusion trajectories (B0, B1, B3, B4)"
+F06,f06_gyro_bias_effects,Gyro bias estimation and error mitigation
+F07,f07_gnss_outage_recovery,Error growth and filter recovery across 20s GNSS outage
+F08,f08_wheel_slip_robustness,RMSE vs longitudinal slip ratio across baselines
+F09,f09_sensor_ablation,Ablation bar chart across all 6 baselines
+F10,f10_calibration_nees_nis,Filter consistency evaluation (NEES & NIS)
+F11,f11_range_assisted_localization,Mapped LiDAR range updates in GNSS-denied zones
+F12,f12_combined_failures,Combined stress scenario performance (slip + outage + bias)
+I01,illustration_i1_robot_layout,Robot sensor layout and body coordinate frames
+I02,illustration_i2_odometry_geometry,Skid-steer kinematic geometry and effective track width
+I03,illustration_i3_ekf_cycle,Discrete Extended Kalman Filter state flow
+I04,illustration_i4_wheel_slip,Longitudinal wheel slip vs encoder measurement
+I05,illustration_i5_gnss_outage_dynamics,Covariance growth during GNSS blackout and recovery
+I06,illustration_i6_lidar_geometry,Mapped landmark range-bearing observation geometry

@@ -1,0 +1,22 @@
+# Nominal simulation scenario
+scenario:
+  name: "nominal_trajectory"
+  duration_s: 60.0
+  seed: 42
+  dt_sim_s: 0.01
+
+trajectory:
+  type: "figure_eight"
+  speed_m_s: 0.8
+  radius_m: 4.0
+
+slip:
+  condition: "no_slip"
+  fl_slip_ratio: 0.0
+  fr_slip_ratio: 0.0
+  rl_slip_ratio: 0.0
+  rr_slip_ratio: 0.0
+
+gnss:
+  dropout_prob: 0.0
+  outages: []

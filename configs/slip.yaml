@@ -1,0 +1,19 @@
+# Asymmetric and intermittent wheel slip scenario
+scenario:
+  name: "wheel_slip_investigation"
+  duration_s: 60.0
+  seed: 42
+  dt_sim_s: 0.01
+
+trajectory:
+  type: "curved_path"
+  speed_m_s: 0.8
+
+slip:
+  condition: "left_side_slip"
+  fl_slip_ratio: 0.30
+  fr_slip_ratio: 0.00
+  rl_slip_ratio: 0.30
+  rr_slip_ratio: 0.00
+  intermittent: false
+  time_intervals: [[15.0, 35.0]]

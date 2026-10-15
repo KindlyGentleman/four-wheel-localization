@@ -1,0 +1,37 @@
+# Robot physical platform configuration
+robot:
+  drive_type: "skid_steer_4wd"
+  body_length_m: 0.55
+  body_width_m: 0.40
+  wheel_radius_m: 0.075
+  wheel_base_m: 0.35        # Front to rear axle distance
+  track_width_m: 0.36       # Physical lateral wheel center distance
+  effective_track_width_m: 0.42 # Kinematic effective track width under skid steering
+  mass_kg: 18.5             # Total robot chassis mass
+
+individual_wheels:
+  FL:
+    radius_m: 0.075
+    x_offset_m: 0.175
+    y_offset_m: 0.180
+  FR:
+    radius_m: 0.075
+    x_offset_m: 0.175
+    y_offset_m: -0.180
+  RL:
+    radius_m: 0.075
+    x_offset_m: -0.175
+    y_offset_m: 0.180
+  RR:
+    radius_m: 0.075
+    x_offset_m: -0.175
+    y_offset_m: -0.180
+
+encoders:
+  ticks_per_wheel_revolution: 2048
+  has_individual_encoder: true
+  signed_tick_counts: true
+  gear_ratio: 1.0           # Directly on wheel shaft
+  quantization_enabled: true
+  jitter_std_ticks: 0.5
+  missed_count_prob: 0.0005

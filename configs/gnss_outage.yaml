@@ -1,0 +1,23 @@
+# GNSS outage scenario
+scenario:
+  name: "gnss_outage_investigation"
+  duration_s: 60.0
+  seed: 42
+  dt_sim_s: 0.01
+
+trajectory:
+  type: "figure_eight"
+  speed_m_s: 0.8
+  radius_m: 4.0
+
+slip:
+  condition: "symmetric_moderate"
+  fl_slip_ratio: 0.10
+  fr_slip_ratio: 0.10
+  rl_slip_ratio: 0.10
+  rr_slip_ratio: 0.10
+
+gnss:
+  dropout_prob: 0.0
+  outages:
+    - [15.0, 35.0] # 20-second blackout

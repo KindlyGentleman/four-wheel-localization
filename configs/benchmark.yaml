@@ -1,0 +1,30 @@
+# Benchmark and Monte Carlo evaluation configuration
+benchmark:
+  num_monte_carlo_runs: 50
+  seed_base: 1000
+  duration_s: 50.0
+  dt_sim_s: 0.01
+
+baselines:
+  - "B0_wheel_odometry"
+  - "B1_odometry_gyro"
+  - "B2_odometry_gnss"
+  - "B3_odometry_gyro_gnss"
+  - "B4_odometry_gyro_gnss_compass"
+  - "B5_bias_aware_ekf"
+  - "B6_range_assisted_ekf"
+  - "B7_slip_aware_adaptive_ekf"
+
+conditions:
+  - name: "nominal"
+    slip_ratio: 0.0
+    gnss_outage_s: 0.0
+  - name: "left_slip_30pct"
+    slip_ratio: 0.30
+    gnss_outage_s: 0.0
+  - name: "gnss_outage_20s"
+    slip_ratio: 0.0
+    gnss_outage_s: 20.0
+  - name: "combined_slip_and_outage"
+    slip_ratio: 0.30
+    gnss_outage_s: 20.0
