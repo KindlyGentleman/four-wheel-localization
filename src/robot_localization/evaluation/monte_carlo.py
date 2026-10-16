@@ -29,6 +29,7 @@ class BaselineStats:
     heading_rmse_deg_mean: float
     heading_rmse_deg_std: float
     final_error_mean: float
+    coverage_95_mean: float
     coverage_2sigma_mean: float
     mean_nees_pos: float
 
@@ -85,7 +86,8 @@ class MonteCarloRunner:
                     est_poses=trace.estimated_pose,
                     cov_diags=trace.covariance_diag,
                     nis_gnss=trace.nis_gnss,
-                    nis_compass=trace.nis_compass
+                    nis_compass=trace.nis_compass,
+                    cov_mats=trace.covariance_mat
                 )
                 records.append({
                     "trial": i,
@@ -98,6 +100,7 @@ class MonteCarloRunner:
                     "heading_rmse_deg": m.heading_rmse_deg,
                     "drift_percent": m.drift_percent,
                     "nees_pos": m.mean_nees_pos,
+                    "coverage_95": m.coverage_95,
                     "coverage_2sigma": m.coverage_2sigma,
                 })
 
@@ -127,6 +130,7 @@ class MonteCarloRunner:
                 heading_rmse_deg_mean=float(sub["heading_rmse_deg"].mean()),
                 heading_rmse_deg_std=float(sub["heading_rmse_deg"].std(ddof=1)) if n > 1 else 0.0,
                 final_error_mean=float(sub["pos_final_m"].mean()),
+                coverage_95_mean=float(sub["coverage_95"].mean()),
                 coverage_2sigma_mean=float(sub["coverage_2sigma"].mean()),
                 mean_nees_pos=float(sub["nees_pos"].mean())
             )

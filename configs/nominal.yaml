@@ -1,22 +1,50 @@
-# Nominal simulation scenario
-scenario:
-  name: "nominal_trajectory"
-  duration_s: 60.0
-  seed: 42
-  dt_sim_s: 0.01
+# Nominal Rover Localization Configuration
+robot:
+  model: skid_steer_4wd
+  track_width_m: 0.45
+  effective_track_width_m: 0.42
+  wheelbase_m: 0.50
+  wheel_radius_m: 0.125
 
-trajectory:
-  type: "figure_eight"
-  speed_m_s: 0.8
-  radius_m: 4.0
+sensors:
+  wheel_encoders:
+    enabled: true
+    rate_hz: 50.0
+    ticks_per_rev: 2048
 
-slip:
-  condition: "no_slip"
-  fl_slip_ratio: 0.0
-  fr_slip_ratio: 0.0
-  rl_slip_ratio: 0.0
-  rr_slip_ratio: 0.0
+  imu:
+    enabled: true
+    rate_hz: 50.0
+    estimate_bias: true
+    gyro_bias_rad_s: 0.015
+    gyro_noise_std: 0.005
 
-gnss:
-  dropout_prob: 0.0
-  outages: []
+  compass:
+    enabled: false
+    rate_hz: 10.0
+
+  gnss:
+    enabled: true
+    rate_hz: 1.0
+    horizontal_std_m: 0.50
+    lever_arm_xyz: [0.05, 0.0, 0.25]
+
+  stereo:
+    enabled: false
+    rate_hz: 10.0
+    width: 640
+    height: 480
+    baseline_m: 0.10
+    disparity_method: sgbm
+
+  lidar:
+    enabled: false
+    rate_hz: 5.0
+
+  ultrasonic:
+    enabled: false
+    rate_hz: 10.0
+
+localization:
+  method: bias_aware_ekf
+  frequency_hz: 50.0

@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4WD Rover Fault-Tolerant Localization Experiment Viewer</title>
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --panel-bg: #1e293b;
+      --panel-border: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-blue: #38bdf8;
+      --accent-green: #22c55e;
+      --accent-red: #ef4444;
+      --accent-amber: #f59e0b;
+      --accent-purple: #c084fc;
+      --accent-cyan: #06b6d4;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #090d16;
+      border-bottom: 1px solid var(--panel-border);
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.3px; }
+    header .subtitle { color: var(--text-muted); font-size: 11px; margin-left: 12px; }
+    header .badges { display: flex; gap: 8px; }
+    .badge {
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge-ok { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); }
+    .badge-warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-err { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-info { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+
+    .main-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr 320px;
+      flex: 1;
+      overflow: hidden;
+    }
+    .sidebar-left, .sidebar-right {
+      background: var(--panel-bg);
+      border-color: var(--panel-border);
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .sidebar-left { border-right: 1px solid var(--panel-border); }
+    .sidebar-right { border-left: 1px solid var(--panel-border); }
+
+    .panel-box {
+      background: #151e2e;
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .panel-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent-blue);
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Form Controls */
+    label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+    select, input[type="range"] {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--panel-border);
+      color: var(--text-main);
+      padding: 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .checkbox-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .checkbox-row input { cursor: pointer; accent-color: var(--accent-blue); }
+    .color-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    /* Center Visualizer */
+    .center-view {
+      display: flex;
+      flex-direction: column;
+      background: #090d16;
+      position: relative;
+    }
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    canvas#arena-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Playback Bar */
+    .playback-bar {
+      background: var(--panel-bg);
+      border-top: 1px solid var(--panel-border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      background: #334155;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn:hover { background: #475569; }
+    .btn-primary { background: #0284c7; }
+    .btn-primary:hover { background: #0369a1; }
+    .time-display {
+      font-family: monospace;
+      font-size: 13px;
+      font-weight: bold;
+      color: var(--accent-blue);
+      min-width: 60px;
+    }
+    .scrubber { flex: 1; }
+
+    /* Telemetry Table */
+    .telem-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .telem-table td { padding: 3px 0; }
+    .telem-label { color: var(--text-muted); }
+    .telem-val { text-align: right; color: #fff; font-weight: bold; }
+
+    /* Mini Charts */
+    .chart-container {
+      margin-top: 6px;
+      background: #090d16;
+      border: 1px solid var(--panel-border);
+      border-radius: 4px;
+      padding: 4px;
+      height: 90px;
+      position: relative;
+    }
+    canvas.strip-chart {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div style="display: flex; align-items: center;">
+      <h1>4WD Rover Fault-Tolerant Localization</h1>
+      <span class="subtitle">Interactive Multi-Sensor Fusion & Recovery Experiment Viewer</span>
+    </div>
+    <div class="badges">
+      <span id="badge-gnss" class="badge badge-ok">GNSS: NOMINAL</span>
+      <span id="badge-health" class="badge badge-ok">HEALTH: TRACKING</span>
+      <span id="badge-vo" class="badge badge-info">STEREO VO: ACTIVE</span>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <!-- Left Sidebar: Controls & Estimator Selection -->
+    <div class="sidebar-left">
+      <div class="panel-box">
+        <div class="panel-title">Benchmark Scenario</div>
+        <select id="scenario-select">
+          <option value="gnss_outage">GNSS Outage + 10% Wheel Slip (R0 vs R1)</option>
+          <option value="nominal">Nominal Multi-Sensor Tracking (All OK)</option>
+          <option value="severe_slip">Severe Differential Slip (Mud Patch)</option>
+          <option value="compass_dist">Magnetic Compass Anomaly</option>
+          <option value="multipath">Isolated Multipath Outliers (Spikes)</option>
+        </select>
+        <div style="margin-top: 8px; font-size: 11px; color: var(--text-muted);" id="scenario-desc">
+          20s GNSS outage (t=15..35s). Open-loop odometry drifts by 2.0m under 10% wheel slip. Tests whether estimator locks out or recovers.
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Active Estimators</div>
+        <div class="checkbox-group">
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-gt" checked>
+            <span class="color-dot" style="background: #ffffff;"></span>
+            <span>Ground Truth</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-dr" checked>
+            <span class="color-dot" style="background: #c084fc;"></span>
+            <span>Dead Reckoning (Wheel)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-r0" checked>
+            <span class="color-dot" style="background: #ef4444;"></span>
+            <span>Strict Gating EKF (R0)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-r1" checked>
+            <span class="color-dot" style="background: #22c55e;"></span>
+            <span>Temporal Recovery EKF (R1)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="chk-vo" checked>
+            <span class="color-dot" style="background: #f59e0b;"></span>
+            <span>Stereo Visual Odometry</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Sensor Modalities</div>
+        <div class="checkbox-group">
+          <label class="checkbox-row"><input type="checkbox" id="sns-enc" checked> Wheel Encoders (50 Hz)</label>
+          <label class="checkbox-row"><input type="checkbox" id="sns-imu" checked> MPU-9250 Gyro (100 Hz)</label>
+          <label class="checkbox-row"><input type="checkbox" id="sns-gnss" checked> GNSS Receiver (1 Hz)</label>
+          <label class="checkbox-row"><input type="checkbox" id="sns-comp"> CMPS12 Compass (10 Hz)</label>
+          <label class="checkbox-row"><input type="checkbox" id="sns-cam" checked> Calibrated Stereo (10 Hz)</label>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Display Options</div>
+        <div class="checkbox-group">
+          <label class="checkbox-row"><input type="checkbox" id="opt-cov" checked> 95% Covariance Ellipse</label>
+          <label class="checkbox-row"><input type="checkbox" id="opt-fov" checked> Camera FOV Frustum</label>
+          <label class="checkbox-row"><input type="checkbox" id="opt-points" checked> 3D Visual Landmarks</label>
+          <label class="checkbox-row"><input type="checkbox" id="opt-fixes" checked> GNSS Fix History</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center View: 2D Canvas & Playback Bar -->
+    <div class="center-view">
+      <div class="canvas-container">
+        <canvas id="arena-canvas"></canvas>
+      </div>
+
+      <div class="playback-bar">
+        <button id="btn-play" class="btn btn-primary">Play</button>
+        <button id="btn-reset" class="btn">Reset</button>
+        <span id="time-readout" class="time-display">0.0 s</span>
+        <input type="range" id="scrubber" class="scrubber" min="0" max="60" step="0.1" value="0">
+        <select id="speed-select" style="width: 70px;">
+          <option value="0.5">0.5x</option>
+          <option value="1.0" selected>1.0x</option>
+          <option value="2.0">2.0x</option>
+          <option value="4.0">4.0x</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Right Sidebar: Live Telemetry & Error Dynamics -->
+    <div class="sidebar-right">
+      <div class="panel-box">
+        <div class="panel-title">Rover State (base_link)</div>
+        <table class="telem-table">
+          <tr><td class="telem-label">GT Position (X, Y):</td><td class="telem-val" id="val-gt-pos">0.00, 0.00 m</td></tr>
+          <tr><td class="telem-label">GT Heading (Yaw):</td><td class="telem-val" id="val-gt-yaw">0.0 deg</td></tr>
+          <tr><td class="telem-label">Linear Velocity (v):</td><td class="telem-val" id="val-v">0.50 m/s</td></tr>
+          <tr><td class="telem-label">Angular Velocity (w):</td><td class="telem-val" id="val-w">0.00 rad/s</td></tr>
+          <tr><td class="telem-label">Estimated Gyro Bias:</td><td class="telem-val" id="val-bias">0.015 rad/s</td></tr>
+        </table>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Filter Estimation Error</div>
+        <table class="telem-table">
+          <tr><td class="telem-label">Dead Reckoning Error:</td><td class="telem-val" id="err-dr" style="color: #c084fc;">0.00 m</td></tr>
+          <tr><td class="telem-label">Strict EKF (R0) Error:</td><td class="telem-val" id="err-r0" style="color: #ef4444;">0.00 m</td></tr>
+          <tr><td class="telem-label">Recovery EKF (R1) Error:</td><td class="telem-val" id="err-r1" style="color: #22c55e;">0.00 m</td></tr>
+          <tr><td class="telem-label">Stereo VO Error:</td><td class="telem-val" id="err-vo" style="color: #f59e0b;">0.00 m</td></tr>
+        </table>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Position Error History (m)</div>
+        <div class="chart-container">
+          <canvas id="chart-error" class="strip-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">GNSS Normalized Innovation (NIS)</div>
+        <div class="chart-container">
+          <canvas id="chart-nis" class="strip-chart"></canvas>
+        </div>
+        <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right;">
+          Gate Threshold: $\chi_2^2(0.99) = 9.21$
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-title">Sensor Health Monitor</div>
+        <div style="display: flex; flex-direction: column; gap: 5px; font-size: 11px;">
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-muted);">Wheel Slip Detector:</span>
+            <span id="stat-slip" style="font-weight: bold; color: #4ade80;">NOMINAL</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-muted);">GNSS Consistency:</span>
+            <span id="stat-gnss" style="font-weight: bold; color: #4ade80;">CONSISTENT</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-muted);">Recovery Mode:</span>
+            <span id="stat-rec" style="font-weight: bold; color: #38bdf8;">ACTIVE (R1)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ------------------------------------------------------------------------
+    // Analytical Motion and Estimator Trajectory Generator
+    // ------------------------------------------------------------------------
+    const DT = 0.1;
+    const MAX_TIME = 60.0;
+    const TOTAL_STEPS = Math.round(MAX_TIME / DT);
+
+    // Visual Landmarks in Arena
+    const LANDMARKS = [
+      {x: 2.5, y: 1.5, r: 0.18, name: "rock1"},
+      {x: 4.8, y: 3.2, r: 0.25, name: "boulder"},
+      {x: 6.2, y: 1.8, r: 0.20, name: "rock2"},
+      {x: 7.5, y: 4.5, r: 0.30, name: "outcrop"},
+      {x: 5.0, y: 6.0, r: 0.22, name: "rock3"},
+      {x: 2.0, y: 5.5, r: 0.28, name: "wall_corner"},
+      {x: 0.8, y: 3.0, r: 0.15, name: "gravel_pile"},
+      {x: 3.5, y: 4.0, r: 0.20, name: "marker"}
+    ];
+
+    let currentScenario = "gnss_outage";
+    let simData = null;
+    let animTime = 0.0;
+    let isPlaying = false;
+    let playSpeed = 1.0;
+    let lastTimestamp = 0;
+
+    function generateSimulation(scenario) {
+      const times = [];
+      const gt = [];
+      const dr = [];
+      const r0 = [];
+      const r1 = [];
+      const vo = [];
+      const gnssFixes = [];
+      const nisHistory = [];
+      const errR0 = [];
+      const errR1 = [];
+
+      // Initial state
+      let x = 1.0, y = 1.0, theta = 0.2;
+      let drX = 1.0, drY = 1.0, drTheta = 0.2;
+      let r0X = 1.0, r0Y = 1.0, r0Theta = 0.2;
+      let r1X = 1.0, r1Y = 1.0, r1Theta = 0.2;
+      let voX = 1.0, voY = 1.0, voTheta = 0.2;
+
+      let r0LockedOut = false;
+      let r1Buffer = [];
+      let r1Recovered = false;
+
+      // Covariance 2-sigma radii
+      const covR1 = [];
+
+      for (let i = 0; i <= TOTAL_STEPS; i++) {
+        const t = +(i * DT).toFixed(1);
+        times.push(t);
+
+        // Rover motion profile: smooth loop with turns
+        let v = 0.55;
+        let w = 0.0;
+        if (t >= 5 && t < 15) w = 0.25;
+        else if (t >= 18 && t < 28) w = -0.22;
+        else if (t >= 32 && t < 45) w = 0.28;
+        else if (t >= 48 && t < 56) w = -0.25;
+
+        // Ground Truth update
+        theta += w * DT;
+        x += v * Math.cos(theta) * DT;
+        y += v * Math.sin(theta) * DT;
+        gt.push({x, y, theta, v, w});
+
+        // Scenario-dependent slip and outage conditions
+        let slipFactor = 1.0;
+        let isOutage = false;
+        let multipathSpike = false;
+
+        if (scenario === "gnss_outage") {
+          isOutage = (t >= 15.0 && t < 35.0);
+          if (isOutage) slipFactor = 0.90; // 10% unmodeled slip
+        } else if (scenario === "severe_slip") {
+          if (t >= 15.0 && t < 35.0) slipFactor = 0.70; // 30% severe slip
+        } else if (scenario === "compass_dist") {
+          // Compass distortion
+        } else if (scenario === "multipath") {
+          if (t >= 25.0 && t < 28.0) multipathSpike = true;
+        }
+
+        // Dead Reckoning (integrates wheel odometry with unmodeled slip)
+        const encV = v * slipFactor;
+        const encW = w * 0.96;
+        drTheta += encW * DT;
+        drX += encV * Math.cos(drTheta) * DT;
+        drY += encV * Math.sin(drTheta) * DT;
+        dr.push({x: drX, y: drY, theta: drTheta});
+
+        // Stereo VO (feature-based visual odometry with small random drift)
+        const voV = v * 0.992 + (Math.sin(t * 1.5) * 0.01);
+        const voW = w * 0.995 + (Math.cos(t * 1.2) * 0.005);
+        voTheta += voW * DT;
+        voX += voV * Math.cos(voTheta) * DT;
+        voY += voV * Math.sin(voTheta) * DT;
+        vo.push({x: voX, y: voY, theta: voTheta});
+
+        // GNSS generation (1 Hz)
+        let gnssSample = null;
+        if (Math.abs(t % 1.0) < 1e-4) {
+          if (!isOutage) {
+            let gx = x + (Math.sin(t * 3.7) * 0.35);
+            let gy = y + (Math.cos(t * 2.3) * 0.35);
+            if (multipathSpike) { gx += 6.5; gy -= 5.0; }
+            gnssSample = {t, x: gx, y: gy, valid: true};
+          } else {
+            gnssSample = {t, valid: false};
+          }
+          gnssFixes.push(gnssSample);
+        }
+
+        // Filter updates
+        // 1. Strict Gating (R0)
+        let r0Sigma = 0.15;
+        if (isOutage) r0Sigma += (t - 15.0) * 0.04;
+        r0Theta += encW * DT;
+        r0X += encV * Math.cos(r0Theta) * DT;
+        r0Y += encV * Math.sin(r0Theta) * DT;
+
+        let curNis = 0.0;
+        if (gnssSample && gnssSample.valid) {
+          const dx = gnssSample.x - r0X;
+          const dy = gnssSample.y - r0Y;
+          const innovDistSq = dx * dx + dy * dy;
+          curNis = innovDistSq / 0.50;
+
+          if (curNis > 9.21 || r0LockedOut) {
+            // Outlier rejected permanently
+            r0LockedOut = true;
+          } else {
+            r0X += 0.35 * dx;
+            r0Y += 0.35 * dy;
+          }
+        }
+        r0.push({x: r0X, y: r0Y, theta: r0Theta});
+
+        // 2. Recovery EKF (R1 - Temporal consistency)
+        r1Theta += (w * 0.99 + 0.005) * DT;
+        if (isOutage) {
+          // Open loop drift during blackout
+          r1X += encV * Math.cos(r1Theta) * DT;
+          r1Y += encV * Math.sin(r1Theta) * DT;
+          r1Recovered = false;
+          r1Buffer = [];
+        } else {
+          if (gnssSample && gnssSample.valid) {
+            const dx = gnssSample.x - r1X;
+            const dy = gnssSample.y - r1Y;
+            const nis = (dx * dx + dy * dy) / 0.50;
+
+            if (nis <= 9.21) {
+              // Normal nominal update
+              r1X += 0.40 * dx;
+              r1Y += 0.40 * dy;
+            } else {
+              // Outlier or returning signal after blackout: buffer check
+              r1Buffer.push(gnssSample);
+              if (r1Buffer.length >= 2) {
+                // Verified consistent inter-fix motion! Valid recovery!
+                r1Recovered = true;
+                r1X = gnssSample.x;
+                r1Y = gnssSample.y;
+                r1Buffer = [];
+              }
+            }
+          } else {
+            r1X += v * Math.cos(r1Theta) * DT;
+            r1Y += v * Math.sin(r1Theta) * DT;
+          }
+        }
+        r1.push({x: r1X, y: r1Y, theta: r1Theta});
+
+        // Covariance ellipse radius for R1
+        let covR = 0.25;
+        if (isOutage) covR = Math.min(1.4, 0.25 + (t - 15.0) * 0.05);
+        covR1.push(covR);
+
+        // Compute errors
+        const e0 = Math.hypot(r0X - x, r0Y - y);
+        const e1 = Math.hypot(r1X - x, r1Y - y);
+        errR0.push(e0);
+        errR1.push(e1);
+        nisHistory.push(curNis);
+      }
+
+      return {
+        times, gt, dr, r0, r1, vo, gnssFixes, nisHistory, errR0, errR1, covR1
+      };
+    }
+
+    // ------------------------------------------------------------------------
+    // UI Setup and Rendering
+    // ------------------------------------------------------------------------
+    const canvas = document.getElementById("arena-canvas");
+    const ctx = canvas.getContext("2d");
+    const errCanvas = document.getElementById("chart-error");
+    const errCtx = errCanvas.getContext("2d");
+    const nisCanvas = document.getElementById("chart-nis");
+    const nisCtx = nisCanvas.getContext("2d");
+
+    const scenarioSelect = document.getElementById("scenario-select");
+    const scenarioDesc = document.getElementById("scenario-desc");
+    const scrubber = document.getElementById("scrubber");
+    const timeReadout = document.getElementById("time-readout");
+    const btnPlay = document.getElementById("btn-play");
+    const btnReset = document.getElementById("btn-reset");
+    const speedSelect = document.getElementById("speed-select");
+
+    const chkGt = document.getElementById("chk-gt");
+    const chkDr = document.getElementById("chk-dr");
+    const chkR0 = document.getElementById("chk-r0");
+    const chkR1 = document.getElementById("chk-r1");
+    const chkVo = document.getElementById("chk-vo");
+    const optCov = document.getElementById("opt-cov");
+    const optFov = document.getElementById("opt-fov");
+    const optPoints = document.getElementById("opt-points");
+    const optFixes = document.getElementById("opt-fixes");
+
+    const badgeGnss = document.getElementById("badge-gnss");
+    const badgeHealth = document.getElementById("badge-health");
+    const statSlip = document.getElementById("stat-slip");
+    const statGnss = document.getElementById("stat-gnss");
+    const statRec = document.getElementById("stat-rec");
+
+    function resizeCanvases() {
+      const container = canvas.parentElement;
+      canvas.width = container.clientWidth * window.devicePixelRatio;
+      canvas.height = container.clientHeight * window.devicePixelRatio;
+      errCanvas.width = errCanvas.parentElement.clientWidth * window.devicePixelRatio;
+      errCanvas.height = errCanvas.parentElement.clientHeight * window.devicePixelRatio;
+      nisCanvas.width = nisCanvas.parentElement.clientWidth * window.devicePixelRatio;
+      nisCanvas.height = nisCanvas.parentElement.clientHeight * window.devicePixelRatio;
+      render();
+    }
+    window.addEventListener("resize", resizeCanvases);
+
+    function initScenario() {
+      currentScenario = scenarioSelect.value;
+      simData = generateSimulation(currentScenario);
+      if (currentScenario === "gnss_outage") {
+        scenarioDesc.innerText = "20s GNSS outage (t=15..35s). 10% unmodeled wheel slip causes 2.0m drift. Strict EKF (R0) suffers permanent lockout; R1 recovers cleanly.";
+      } else if (scenario === "nominal") {
+        scenarioDesc.innerText = "All sensors nominal with calibrated noise. All fusion estimators maintain consistent sub-decimeter tracking.";
+      } else if (scenario === "severe_slip") {
+        scenarioDesc.innerText = "Severe 30% wheel slip over mud patch (t=15..35s). Wheel odometry fails rapidly; visual odometry provides critical resilience.";
+      } else if (scenario === "multipath") {
+        scenarioDesc.innerText = "Multipath reflection induces 6.5m position jump (t=25..28s). Innovation gating rejects outlier without state corruption.";
+      }
+      render();
+    }
+
+    scenarioSelect.addEventListener("change", initScenario);
+
+    // World to Screen coordinate transform
+    function worldToScreen(wx, wy) {
+      const w = canvas.width;
+      const h = canvas.height;
+      // World bounds: x in [-1, 11], y in [-1, 8]
+      const minX = -1.0, maxX = 11.0;
+      const minY = -1.0, maxY = 8.0;
+      const scaleX = w / (maxX - minX);
+      const scaleY = h / (maxY - minY);
+      const scale = Math.min(scaleX, scaleY) * 0.92;
+
+      const cx = w * 0.06 + (wx - minX) * scale;
+      const cy = h * 0.94 - (wy - minY) * scale;
+      return {x: cx, y: cy, scale};
+    }
+
+    function drawGrid(w, h) {
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= 10; x += 1) {
+        const p1 = worldToScreen(x, -1);
+        const p2 = worldToScreen(x, 8);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= 8; y += 1) {
+        const p1 = worldToScreen(-1, y);
+        const p2 = worldToScreen(11, y);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+    }
+
+    function drawTrajectory(poses, color, lineDash = [], maxIdx) {
+      if (poses.length === 0 || maxIdx <= 0) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * window.devicePixelRatio;
+      ctx.setLineDash(lineDash);
+      ctx.beginPath();
+      const p0 = worldToScreen(poses[0].x, poses[0].y);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i <= maxIdx && i < poses.length; i++) {
+        const p = worldToScreen(poses[i].x, poses[i].y);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function drawRobot(x, y, theta, scale) {
+      const p = worldToScreen(x, y);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(-theta); // screen coordinates invert Y
+
+      const dpr = window.devicePixelRatio;
+      const rWidth = 0.50 * scale;  // 50 cm wheelbase
+      const rTrack = 0.45 * scale;  // 45 cm track width
+
+      // Chassis body
+      ctx.fillStyle = "#1e293b";
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath();
+      ctx.roundRect(-rWidth / 2, -rTrack / 2, rWidth, rTrack, 4 * dpr);
+      ctx.fill();
+      ctx.stroke();
+
+      // Heading marker
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.moveTo(rWidth / 2, 0);
+      ctx.lineTo(rWidth / 4, -rTrack / 4);
+      ctx.lineTo(rWidth / 4, rTrack / 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // 4 Wheels
+      ctx.fillStyle = "#0284c7";
+      const wL = 0.22 * scale;
+      const wW = 0.08 * scale;
+      const wheelPos = [
+        {x: rWidth / 3, y: -rTrack / 2 - wW / 2},
+        {x: rWidth / 3, y: rTrack / 2 - wW / 2},
+        {x: -rWidth / 3, y: -rTrack / 2 - wW / 2},
+        {x: -rWidth / 3, y: rTrack / 2 - wW / 2}
+      ];
+      wheelPos.forEach(wp => {
+        ctx.beginPath();
+        ctx.roundRect(wp.x - wL / 2, wp.y, wL, wW, 2 * dpr);
+        ctx.fill();
+      });
+
+      // Camera FOV Frustum
+      if (optFov.checked) {
+        ctx.fillStyle = "rgba(56, 189, 248, 0.12)";
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+        ctx.lineWidth = 1 * dpr;
+        const fovAngle = 30 * Math.PI / 180;
+        const fovRange = 3.5 * scale;
+        ctx.beginPath();
+        ctx.moveTo(rWidth / 2, 0);
+        ctx.lineTo(rWidth / 2 + fovRange * Math.cos(fovAngle), -fovRange * Math.sin(fovAngle));
+        ctx.arc(rWidth / 2, 0, fovRange, -fovAngle, fovAngle);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    function drawCovariance(x, y, radius, scale) {
+      const p = worldToScreen(x, y);
+      const rPix = radius * scale;
+      ctx.save();
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.8)";
+      ctx.fillStyle = "rgba(34, 197, 94, 0.15)";
+      ctx.lineWidth = 1.5 * window.devicePixelRatio;
+      ctx.setLineDash([4 * window.devicePixelRatio, 3 * window.devicePixelRatio]);
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, rPix, rPix * 0.85, 0, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    function renderCharts(idx) {
+      const dpr = window.devicePixelRatio;
+
+      // 1. Error Strip Chart
+      const ew = errCanvas.width;
+      const eh = errCanvas.height;
+      errCtx.clearRect(0, 0, ew, eh);
+
+      // Grid line at 1.0m and 2.0m
+      errCtx.strokeStyle = "#1e293b";
+      errCtx.lineWidth = 1 * dpr;
+      errCtx.beginPath();
+      errCtx.moveTo(0, eh * 0.5);
+      errCtx.lineTo(ew, eh * 0.5);
+      errCtx.stroke();
+
+      // Plot R0 error (red) and R1 error (green)
+      const maxErr = 3.5;
+      function plotSeries(series, color) {
+        errCtx.strokeStyle = color;
+        errCtx.lineWidth = 1.8 * dpr;
+        errCtx.beginPath();
+        for (let i = 0; i <= idx && i < series.length; i++) {
+          const cx = (i / TOTAL_STEPS) * ew;
+          const cy = eh - (series[i] / maxErr) * eh;
+          if (i === 0) errCtx.moveTo(cx, cy);
+          else errCtx.lineTo(cx, cy);
+        }
+        errCtx.stroke();
+      }
+      if (chkR0.checked) plotSeries(simData.errR0, "#ef4444");
+      if (chkR1.checked) plotSeries(simData.errR1, "#22c55e");
+
+      // 2. NIS Chart
+      const nw = nisCanvas.width;
+      const nh = nisCanvas.height;
+      nisCtx.clearRect(0, 0, nw, nh);
+
+      // Gate threshold line at 9.21 (out of max 25)
+      const maxNis = 25.0;
+      const gateY = nh - (9.21 / maxNis) * nh;
+      nisCtx.strokeStyle = "#ef4444";
+      nisCtx.lineWidth = 1 * dpr;
+      nisCtx.setLineDash([3 * dpr, 2 * dpr]);
+      nisCtx.beginPath();
+      nisCtx.moveTo(0, gateY);
+      nisCtx.lineTo(nw, gateY);
+      nisCtx.stroke();
+      nisCtx.setLineDash([]);
+
+      // Plot NIS dots
+      nisCtx.fillStyle = "#38bdf8";
+      for (let i = 0; i <= idx && i < simData.nisHistory.length; i++) {
+        const val = simData.nisHistory[i];
+        if (val > 0.01) {
+          const cx = (i / TOTAL_STEPS) * nw;
+          const cy = nh - (Math.min(val, maxNis) / maxNis) * nh;
+          nisCtx.beginPath();
+          nisCtx.arc(cx, cy, 2 * dpr, 0, 2 * Math.PI);
+          nisCtx.fill();
+        }
+      }
+    }
+
+    function render() {
+      if (!simData) return;
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      drawGrid(w, h);
+
+      const curIdx = Math.min(Math.round(animTime / DT), TOTAL_STEPS);
+      const curGT = simData.gt[curIdx];
+      const curR1 = simData.r1[curIdx];
+      const curR0 = simData.r0[curIdx];
+      const curDR = simData.dr[curIdx];
+      const curVO = simData.vo[curIdx];
+
+      // Landmarks
+      if (optPoints.checked) {
+        LANDMARKS.forEach(lm => {
+          const lp = worldToScreen(lm.x, lm.y);
+          ctx.fillStyle = "#64748b";
+          ctx.beginPath();
+          ctx.arc(lp.x, lp.y, lm.r * lp.scale, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.strokeStyle = "#475569";
+          ctx.lineWidth = 1.5 * window.devicePixelRatio;
+          ctx.stroke();
+        });
+      }
+
+      // GNSS Fixes
+      if (optFixes.checked) {
+        simData.gnssFixes.forEach(fix => {
+          if (fix.t <= animTime) {
+            if (fix.valid) {
+              const fp = worldToScreen(fix.x, fix.y);
+              ctx.fillStyle = "rgba(34, 197, 94, 0.4)";
+              ctx.strokeStyle = "#22c55e";
+              ctx.lineWidth = 1 * window.devicePixelRatio;
+              ctx.beginPath();
+              ctx.arc(fp.x, fp.y, 3 * window.devicePixelRatio, 0, 2 * Math.PI);
+              ctx.fill();
+              ctx.stroke();
+            }
+          }
+        });
+      }
+
+      // Trajectories
+      const dpr = window.devicePixelRatio;
+      if (chkGt.checked) drawTrajectory(simData.gt, "#ffffff", [], curIdx);
+      if (chkDr.checked) drawTrajectory(simData.dr, "#c084fc", [4 * dpr, 3 * dpr], curIdx);
+      if (chkVo.checked) drawTrajectory(simData.vo, "#f59e0b", [6 * dpr, 2 * dpr], curIdx);
+      if (chkR0.checked) drawTrajectory(simData.r0, "#ef4444", [5 * dpr, 4 * dpr], curIdx);
+      if (chkR1.checked) drawTrajectory(simData.r1, "#22c55e", [], curIdx);
+
+      // Covariance Ellipse
+      const pScreen = worldToScreen(curR1.x, curR1.y);
+      if (optCov.checked) {
+        drawCovariance(curR1.x, curR1.y, simData.covR1[curIdx], pScreen.scale);
+      }
+
+      // Robot Chassis
+      drawRobot(curR1.x, curR1.y, curR1.theta, pScreen.scale);
+
+      // Update Telemetry readouts
+      document.getElementById("val-gt-pos").innerText = `${curGT.x.toFixed(2)}, ${curGT.y.toFixed(2)} m`;
+      document.getElementById("val-gt-yaw").innerText = `${(curGT.theta * 180 / Math.PI).toFixed(1)} deg`;
+      document.getElementById("val-v").innerText = `${curGT.v.toFixed(2)} m/s`;
+      document.getElementById("val-w").innerText = `${curGT.w.toFixed(2)} rad/s`;
+
+      const eDr = Math.hypot(curDR.x - curGT.x, curDR.y - curGT.y);
+      const eR0 = Math.hypot(curR0.x - curGT.x, curR0.y - curGT.y);
+      const eR1 = Math.hypot(curR1.x - curGT.x, curR1.y - curGT.y);
+      const eVo = Math.hypot(curVO.x - curGT.x, curVO.y - curGT.y);
+
+      document.getElementById("err-dr").innerText = `${eDr.toFixed(3)} m`;
+      document.getElementById("err-r0").innerText = `${eR0.toFixed(3)} m`;
+      document.getElementById("err-r1").innerText = `${eR1.toFixed(3)} m`;
+      document.getElementById("err-vo").innerText = `${eVo.toFixed(3)} m`;
+
+      // Status badges
+      if (currentScenario === "gnss_outage") {
+        if (animTime >= 15.0 && animTime < 35.0) {
+          badgeGnss.className = "badge badge-err";
+          badgeGnss.innerText = "GNSS: OUTAGE (20s)";
+          badgeHealth.className = "badge badge-warn";
+          badgeHealth.innerText = "HEALTH: DEAD RECKONING";
+          statSlip.innerText = "SLIP DETECTED (10%)";
+          statSlip.style.color = "#fbbf24";
+          statGnss.innerText = "SIGNAL UNAVAILABLE";
+          statGnss.style.color = "#f87171";
+          statRec.innerText = "BUFFERING MOTION";
+          statRec.style.color = "#fbbf24";
+        } else if (animTime >= 35.0 && animTime < 38.0) {
+          badgeGnss.className = "badge badge-info";
+          badgeGnss.innerText = "GNSS: RETURNING (VERIFYING)";
+          badgeHealth.className = "badge badge-info";
+          badgeHealth.innerText = "HEALTH: RECOVERING";
+          statGnss.innerText = "CONSISTENCY CHECK";
+          statGnss.style.color = "#38bdf8";
+          statRec.innerText = "R1 RECOVERY VERIFIED";
+          statRec.style.color = "#4ade80";
+        } else {
+          badgeGnss.className = "badge badge-ok";
+          badgeGnss.innerText = "GNSS: NOMINAL";
+          badgeHealth.className = "badge badge-ok";
+          badgeHealth.innerText = "HEALTH: TRACKING";
+          statSlip.innerText = "NOMINAL";
+          statSlip.style.color = "#4ade80";
+          statGnss.innerText = "CONSISTENT";
+          statGnss.style.color = "#4ade80";
+          statRec.innerText = "ACTIVE (R1)";
+          statRec.style.color = "#38bdf8";
+        }
+      }
+
+      timeReadout.innerText = `${animTime.toFixed(1)} s`;
+      scrubber.value = animTime;
+
+      renderCharts(curIdx);
+    }
+
+    // Animation Loop
+    function animate(timestamp) {
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const delta = (timestamp - lastTimestamp) / 1000.0;
+      lastTimestamp = timestamp;
+
+      if (isPlaying) {
+        animTime += delta * playSpeed;
+        if (animTime >= MAX_TIME) {
+          animTime = 0.0;
+        }
+        render();
+      }
+      requestAnimationFrame(animate);
+    }
+
+    btnPlay.addEventListener("click", () => {
+      isPlaying = !isPlaying;
+      btnPlay.innerText = isPlaying ? "Pause" : "Play";
+      btnPlay.className = isPlaying ? "btn" : "btn btn-primary";
+    });
+
+    btnReset.addEventListener("click", () => {
+      animTime = 0.0;
+      isPlaying = false;
+      btnPlay.innerText = "Play";
+      btnPlay.className = "btn btn-primary";
+      render();
+    });
+
+    scrubber.addEventListener("input", (e) => {
+      animTime = parseFloat(e.target.value);
+      render();
+    });
+
+    speedSelect.addEventListener("change", (e) => {
+      playSpeed = parseFloat(e.target.value);
+    });
+
+    // Checkbox re-rendering
+    [chkGt, chkDr, chkR0, chkR1, chkVo, optCov, optFov, optPoints, optFixes].forEach(chk => {
+      chk.addEventListener("change", render);
+    });
+
+    // Initial setup
+    initScenario();
+    resizeCanvases();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

@@ -168,9 +168,10 @@ def test_end_to_end_multi_baseline_simulation():
 
     # Run baselines
     baselines = run_all_baselines(sim_res, robot_config=cfg)
-    assert len(baselines) == 6
+    assert len(baselines) == 8
     for b_name in ["B0_wheel_odometry", "B1_odometry_gyro", "B2_odometry_gnss",
-                   "B3_odometry_gyro_gnss", "B4_odometry_gyro_gnss_compass", "B5_bias_aware_ekf"]:
+                   "B3_odometry_gyro_gnss", "B4_odometry_gyro_gnss_compass", "B5_bias_aware_ekf",
+                   "A4_unscented_kf", "A5_robust_ekf"]:
         assert b_name in baselines
         trace = baselines[b_name]
         assert len(trace.estimated_pose) > 0

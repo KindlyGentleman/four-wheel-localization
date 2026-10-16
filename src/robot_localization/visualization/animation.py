@@ -109,8 +109,10 @@ def render_localization_video(
         ax_map.add_patch(wp)
         wheel_patches.append(wp)
 
-    ax_map.set_xlim(-6.5, 6.5)
-    ax_map.set_ylim(-6.5, 6.5)
+    x_bound = max(9.5, float(np.max(np.abs(gt_x))) + 1.5)
+    y_bound = max(9.5, float(np.max(np.abs(gt_y))) + 1.5)
+    ax_map.set_xlim(-x_bound, x_bound)
+    ax_map.set_ylim(-y_bound, y_bound)
     ax_map.set_aspect("equal")
     ax_map.legend(loc="upper left", facecolor="#21262d", edgecolor="#30363d", labelcolor="#c9d1d9", fontsize=7.5)
 
@@ -178,23 +180,36 @@ def render_localization_video(
 
         # Active status
         in_outage = (15.0 <= t_curr <= 35.0)
+        in_slip = (20.0 <= t_curr <= 35.0)
         gnss_status = "OUTAGE (0 Hz)" if in_outage else "HEALTHY (1 Hz)"
-        gnss_color = "#f85149" if in_outage else "#3fb950"
-        slip_status = "30% LEFT-SLIP ACTIVE" if in_outage else "NOMINAL (NO SLIP)"
+        slip_status = "LEFT-SLIP ACTIVE" if in_slip else "NOMINAL (NO SLIP)"
+
+        # Compute instantaneous kinematics for telemetry
+        dt_f = max(1e-3, t_frames[1] - t_frames[0]) if len(t_frames) > 1 else 0.033
+        if frame_idx > 0:
+            v_inst = math.hypot(gt_x[frame_idx] - gt_x[frame_idx - 1], gt_y[frame_idx] - gt_y[frame_idx - 1]) / dt_f
+            dth = wrap_angle(gt_th[frame_idx] - gt_th[frame_idx - 1])
+            w_inst = dth / dt_f
+        else:
+            v_inst, w_inst = 0.80, 0.0
+        r_wheel = 0.075
+        b_eff = 0.48
+        w_right = (v_inst + 0.5 * b_eff * w_inst) / r_wheel
+        w_left = (v_inst - 0.5 * b_eff * w_inst) / (r_wheel * (0.75 if in_slip else 1.0))
 
         # Live telemetry display
         status_txt = (
             f"SIMULATION TIME  : {t_curr:5.2f} / {total_sim_time:5.2f} s\n"
             f"ROBOT POSE [GT]  : X={cur_x:5.2f}m, Y={cur_y:5.2f}m, Heading={math.degrees(cur_th):5.1f} deg\n"
-            f"4-WHEEL ENCODERS : FL=10.7 rad/s | FR=10.7 rad/s\n"
-            f"                   RL=10.7 rad/s | RR=10.7 rad/s\n"
+            f"4-WHEEL ENCODERS : FL={w_left:5.1f} rad/s | FR={w_right:5.1f} rad/s\n"
+            f"                   RL={w_left:5.1f} rad/s | RR={w_right:5.1f} rad/s\n"
             f"SLIP STATE       : {slip_status}\n"
-            f"MPU-9250 GYRO Z  : {0.18:5.2f} rad/s (Estimated Bias: +0.025 rad/s)\n"
+            f"MPU-9250 GYRO Z  : {w_inst + 0.025:5.2f} rad/s (Bias: +0.025 rad/s)\n"
             f"CMPS12 COMPASS   : {math.degrees(cur_th)%360:5.1f} deg (Cal State: 3/3)\n"
             f"GNSS RECEIVER    : {gnss_status}\n"
             f"--------------------------------------------------\n"
             f"DEAD RECKONING ERR : {err_b0[frame_idx]:5.2f} m (Drifting)\n"
-            f"BIAS-AWARE EKF ERR : {err_b5[frame_idx]:5.2f} m (Robust)"
+            f"BIAS-AWARE EKF ERR : {err_b5[frame_idx]:5.2f} m (Fused)"
         )
         dash_text.set_text(status_txt)
 

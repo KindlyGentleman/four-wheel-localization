@@ -57,7 +57,8 @@ def run_experiment(exp_name: str, sim_builder_func, duration_s: float = 60.0):
             est_poses=trace.estimated_pose,
             cov_diags=trace.covariance_diag,
             nis_gnss=trace.nis_gnss,
-            nis_compass=trace.nis_compass
+            nis_compass=trace.nis_compass,
+            cov_mats=trace.covariance_mat
         )
         metrics_list.append({
             "experiment": exp_name,
@@ -69,9 +70,10 @@ def run_experiment(exp_name: str, sim_builder_func, duration_s: float = 60.0):
             "heading_rmse_deg": m.heading_rmse_deg,
             "drift_percent": m.drift_percent,
             "nees_pos": m.mean_nees_pos,
+            "coverage_95": m.coverage_95,
             "coverage_2sigma": m.coverage_2sigma,
         })
-        print(f"  [{b_name:30s}] Pos RMSE: {m.pos_rmse_m:6.3f} m | Heading RMSE: {m.heading_rmse_deg:6.2f} deg | 2-Sig Cov: {m.coverage_2sigma*100:5.1f}%")
+        print(f"  [{b_name:30s}] Pos RMSE: {m.pos_rmse_m:6.3f} m | Heading RMSE: {m.heading_rmse_deg:6.2f} deg | 95% Cov: {m.coverage_95*100:5.1f}% | 2-Sig Cov: {m.coverage_2sigma*100:5.1f}%")
 
     return sim_res, traces, metrics_list
 
@@ -188,6 +190,10 @@ def main():
         e8_b1_pose=traces_e8["B1_odometry_gyro"].estimated_pose,
         e8_b3_pose=traces_e8["B3_odometry_gyro_gnss"].estimated_pose,
         e8_b3_cov=traces_e8["B3_odometry_gyro_gnss"].covariance_diag,
+        e8_b5_pose=traces_e8["B5_bias_aware_ekf"].estimated_pose,
+        e8_b5_cov=traces_e8["B5_bias_aware_ekf"].covariance_diag,
+        e8_a5_pose=traces_e8["A5_robust_ekf"].estimated_pose,
+        e8_a5_cov=traces_e8["A5_robust_ekf"].covariance_diag,
         # Combined
         comb_t=sim_res_comb.timestamps,
         comb_gt_pose=sim_res_comb.ground_truth_pose,
@@ -197,6 +203,8 @@ def main():
         comb_b4_pose=traces_comb["B4_odometry_gyro_gnss_compass"].estimated_pose,
         comb_b5_pose=traces_comb["B5_bias_aware_ekf"].estimated_pose,
         comb_b5_bg=traces_comb["B5_bias_aware_ekf"].estimated_gyro_bias,
+        comb_a4_pose=traces_comb["A4_unscented_kf"].estimated_pose,
+        comb_a5_pose=traces_comb["A5_robust_ekf"].estimated_pose,
     )
     print(f"Saved compressed trajectory arrays to: {trace_save_path}")
     print("=" * 80)

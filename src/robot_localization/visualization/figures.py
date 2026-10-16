@@ -323,17 +323,33 @@ def plot_f07_gnss_outage_recovery(data: dict, output_dir: Path):
 
 
 def plot_f08_wheel_slip_robustness(output_dir: Path):
-    """F08: Localization RMSE vs. slip ratio across baselines."""
+    """F08: Localization RMSE vs. slip ratio across baselines computed from simulation."""
+    from robot_localization.simulation.scenarios import create_scenario_slip
+    from robot_localization.estimation.baseline_runner import run_all_baselines
+    from robot_localization.evaluation.metrics import compute_trajectory_metrics
+
     set_ieee_style()
     fig, ax = plt.subplots(figsize=(5.2, 3.5), dpi=300)
 
     slip_levels = np.array([0.0, 0.10, 0.20, 0.30, 0.40, 0.50])
+    rmse_b0, rmse_b1, rmse_b3, rmse_b5 = [], [], [], []
 
-    # Empirical scaling from simulation data
-    rmse_b0 = 0.064 + 38.5 * slip_levels
-    rmse_b1 = 7.35 - 3.2 * slip_levels
-    rmse_b3 = 0.616 + 0.55 * slip_levels
-    rmse_b5 = 0.114 + 0.18 * slip_levels
+    for s_lvl in slip_levels:
+        sim, traj_fn, slip_fn = create_scenario_slip(seed=100, duration_s=30.0, slip_ratio_left=float(s_lvl))
+        sim_res = sim.run_simulation(duration_s=30.0, trajectory_func=traj_fn, slip_profile_func=slip_fn)
+        traces = run_all_baselines(sim_res, robot_config=sim.config)
+        for key, bucket in [
+            ("B0_wheel_odometry", rmse_b0),
+            ("B1_odometry_gyro", rmse_b1),
+            ("B3_odometry_gyro_gnss", rmse_b3),
+            ("B5_bias_aware_ekf", rmse_b5),
+        ]:
+            tr = traces[key]
+            m = compute_trajectory_metrics(
+                key, sim_res.timestamps, sim_res.ground_truth_pose,
+                tr.timestamps, tr.estimated_pose, tr.covariance_diag, cov_mats=tr.covariance_mat
+            )
+            bucket.append(m.pos_rmse_m)
 
     ax.plot(slip_levels * 100, rmse_b0, "s--", color="#7f7f7f", lw=1.3, label="B0: 4WD Odometry")
     ax.plot(slip_levels * 100, rmse_b1, "o--", color="#ff7f0e", lw=1.3, label="B1: Odometry + Gyro")
@@ -362,7 +378,7 @@ def plot_f09_sensor_ablation(metrics_csv: Path, output_dir: Path):
 
     baselines = sub["baseline"].values
     short_names = ["B0: Odom", "B1: Odom+Gyro", "B2: Odom+GNSS", "B3: Primary EKF", "B4: +Compass", "B5: Bias-Aware"]
-    rmse_vals = sub["pos_rmse_m"].values
+    rmse_vals = sub["pos_rmse_m"].values[:len(short_names)]
 
     colors = ["#7f7f7f", "#ff7f0e", "#17becf", "#d62728", "#9467bd", "#1f77b4"]
     bars = ax.bar(short_names, rmse_vals, color=colors, edgecolor="#333333", lw=0.8, width=0.55)
@@ -382,32 +398,46 @@ def plot_f09_sensor_ablation(metrics_csv: Path, output_dir: Path):
 
 
 def plot_f10_calibration_nees_nis(output_dir: Path):
-    """F10: Filter statistical consistency (NEES and NIS) with theoretical bounds."""
+    """F10: Actual filter statistical consistency (NEES and NIS) computed from B5 EKF."""
+    from robot_localization.simulation.scenarios import create_scenario_nominal
+    from robot_localization.estimation.baseline_runner import run_all_baselines
+
     set_ieee_style()
     fig, axes = plt.subplots(2, 1, figsize=(5.5, 3.8), dpi=300, sharex=True)
 
-    t = np.linspace(0, 60, 300)
-    # Synthetic consistent NEES for 2-DOF position (expectation = 2.0)
-    rng = np.random.RandomState(42)
-    nees = rng.chisquare(df=2, size=len(t))
-    nis = rng.chisquare(df=2, size=len(t))
+    sim, traj_fn, slip_fn = create_scenario_nominal(seed=42, duration_s=60.0)
+    sim_res = sim.run_simulation(duration_s=60.0, trajectory_func=traj_fn, slip_profile_func=slip_fn)
+    traces = run_all_baselines(sim_res, robot_config=sim.config)
+    tr_b5 = traces["B5_bias_aware_ekf"]
 
-    # Upper 95% bound for chi2(2) = 5.991
-    axes[0].plot(t, nees, "-", color="#1f77b4", lw=1.0, alpha=0.8, label="Empirical Position NEES")
+    t_est = tr_b5.timestamps
+    gt_x = np.interp(t_est, sim_res.timestamps, sim_res.ground_truth_pose[:, 0])
+    gt_y = np.interp(t_est, sim_res.timestamps, sim_res.ground_truth_pose[:, 1])
+    err_xy = np.column_stack([tr_b5.estimated_pose[:, 0] - gt_x, tr_b5.estimated_pose[:, 1] - gt_y])
+
+    nees = np.zeros(len(t_est))
+    for i in range(len(t_est)):
+        P_xy = tr_b5.covariance_mat[i, :2, :2] + np.eye(2) * 1e-9
+        nees[i] = float(err_xy[i].T @ np.linalg.inv(P_xy) @ err_xy[i])
+
+    nis_t = np.array([pt[0] for pt in tr_b5.nis_gnss])
+    nis_v = np.array([pt[1] for pt in tr_b5.nis_gnss])
+
+    axes[0].plot(t_est, nees, "-", color="#1f77b4", lw=1.0, alpha=0.8, label=f"Empirical Position NEES (mean={np.mean(nees):.2f})")
     axes[0].axhline(2.0, color="k", linestyle="-", lw=1.2, label="Theoretical Mean ($E[\\epsilon]=2.0$)")
     axes[0].axhline(5.991, color="r", linestyle="--", lw=1.0, label="95% Upper Bound (5.99)")
     axes[0].set_ylabel("NEES (2-DOF)", fontsize=8)
-    axes[0].set_ylim(0, 10.0)
+    axes[0].set_ylim(0, max(10.0, float(np.percentile(nees, 98)) * 1.15))
     axes[0].grid(True, linestyle=":", alpha=0.6)
     axes[0].legend(loc="upper right", fontsize=6.5)
-    axes[0].set_title("F10: EKF Consistency and Normalized Innovation Squared", fontsize=8.5)
+    axes[0].set_title("F10: Actual B5 EKF Position NEES and GNSS NIS (Nominal Scenario)", fontsize=8.5)
 
-    axes[1].plot(t, nis, "-", color="#2ca02c", lw=1.0, alpha=0.8, label="Empirical GNSS NIS")
+    axes[1].plot(nis_t, nis_v, "o-", color="#2ca02c", lw=1.0, markersize=2.5, alpha=0.8, label=f"Empirical GNSS NIS (mean={np.mean(nis_v):.2f})")
     axes[1].axhline(2.0, color="k", linestyle="-", lw=1.2, label="Theoretical Mean ($E[\\nu]=2.0$)")
-    axes[1].axhline(5.991, color="r", linestyle="--", lw=1.0, label="95% Upper Bound")
+    axes[1].axhline(5.991, color="r", linestyle="--", lw=1.0, label="95% Upper Bound (5.99)")
     axes[1].set_xlabel("Time [s]", fontsize=8)
     axes[1].set_ylabel("NIS (2-DOF)", fontsize=8)
-    axes[1].set_ylim(0, 10.0)
+    axes[1].set_ylim(0, max(10.0, float(np.max(nis_v)) * 1.15 if len(nis_v) else 10.0))
     axes[1].grid(True, linestyle=":", alpha=0.6)
     axes[1].legend(loc="upper right", fontsize=6.5)
 
@@ -419,45 +449,59 @@ def plot_f10_calibration_nees_nis(output_dir: Path):
 
 def plot_f11_range_assisted_localization(output_dir: Path):
     """F11: Mapped landmark LiDAR observation and GNSS-denied trajectory correction."""
+    from robot_localization.simulation.world import LandmarkMap
+    from robot_localization.simulation.scenarios import create_scenario_gnss_outage
+    from robot_localization.estimation.range_assisted_ekf import RangeAssistedEKF
+    from robot_localization.sensors.lidar import KnownLandmarkLiDAR
+
     set_ieee_style()
     fig, ax = plt.subplots(figsize=(4.8, 4.2), dpi=300)
 
-    # 8 Landmarks
-    landmarks = {
-        1: [8.0, 8.0], 2: [-8.0, 8.0], 3: [-8.0, -8.0], 4: [8.0, -8.0],
-        5: [0.0, 9.0], 6: [0.0, -9.0], 7: [9.0, 0.0], 8: [-9.0, 0.0],
-    }
-    for lm_id, (lx, ly) in landmarks.items():
+    env_map = LandmarkMap.create_default_testbed()
+    sim, traj_fn, slip_fn = create_scenario_gnss_outage(seed=42, duration_s=40.0, outage_start_s=5.0, outage_end_s=35.0)
+    sim_res = sim.run_simulation(duration_s=40.0, trajectory_func=traj_fn, slip_profile_func=slip_fn)
+    lidar = KnownLandmarkLiDAR(rng=np.random.RandomState(42))
+
+    p0 = sim_res.ground_truth_pose[0].copy()
+    est_dr = p0.copy()
+    est_b6 = RangeAssistedEKF(initial_state=p0.copy(), initial_cov=np.diag([0.01, 0.01, 0.005]))
+
+    dr_poses, b6_poses = [], []
+    last_gyro = 0.0
+    last_t = 0.0
+    for ev in sim_res.sensor_events:
+        if ev.sensor_type == "imu":
+            last_gyro = ev.data.gyro_rad_s[2]
+        elif ev.sensor_type == "encoder":
+            dt = ev.timestamp - last_t if last_t > 0 else 0.02
+            last_t = ev.timestamp
+            enc = ev.data
+            v = 0.25 * sum(enc[w].angular_speed_rad_s * 0.08 for w in ["FL", "FR", "RL", "RR"])
+            est_dr[0] += v * math.cos(est_dr[2] + 0.5 * last_gyro * dt) * dt
+            est_dr[1] += v * math.sin(est_dr[2] + 0.5 * last_gyro * dt) * dt
+            est_dr[2] = math.atan2(math.sin(est_dr[2] + last_gyro * dt), math.cos(est_dr[2] + last_gyro * dt))
+            est_b6.predict(np.array([v, last_gyro]), np.diag([1e-3, 1e-4]), dt)
+            if int(round(ev.timestamp / 0.02)) % 10 == 0:
+                idx_gt = int(np.argmin(np.abs(sim_res.timestamps - ev.timestamp)))
+                scan = lidar.observe_landmarks(ev.timestamp, sim_res.ground_truth_pose[idx_gt], env_map.landmarks)
+                for obs in scan.observations:
+                    est_b6.update_landmark_observation(obs)
+            dr_poses.append(est_dr.copy())
+            b6_poses.append(est_b6.x.copy())
+
+    dr_arr = np.array(dr_poses)
+    b6_arr = np.array(b6_poses)
+    gt_arr = sim_res.ground_truth_pose
+
+    for lm_id, lm_pos in env_map.landmarks.items():
+        lx, ly = float(lm_pos[0]), float(lm_pos[1])
         ax.plot(lx, ly, "s", color="#ff7f0e", markersize=6, zorder=6)
         ax.text(lx, ly + 0.6, f"$L_{{{lm_id}}}$", ha="center", fontsize=7, color="#d95f02", fontweight="bold")
 
-    # Outer perimeter walls
     ax.plot([-10, 10, 10, -10, -10], [-10, -10, 10, 10, -10], "k-", lw=1.5, label="Mapped Perimeter Walls")
-
-    # Sample robot trajectory during GNSS outage
-    t_samples = np.linspace(0, 2*math.pi, 200)
-    rx = 4.0 * np.sin(t_samples)
-    ry = 3.0 * np.sin(2 * t_samples)
-    ax.plot(rx, ry, "-", color="#1f77b4", lw=1.8, label="Ground Truth Path")
-
-    # Dead reckoning drifting trajectory (without range updates)
-    dr_x = rx + 0.15 * t_samples ** 1.3
-    dr_y = ry - 0.20 * t_samples ** 1.3
-    ax.plot(dr_x, dr_y, ":", color="#7f7f7f", lw=1.2, label="GNSS-Denied Drift (No LiDAR)")
-
-    # Range-assisted EKF trajectory (bounded drift)
-    ekf_x = rx + 0.05 * np.sin(3*t_samples)
-    ekf_y = ry + 0.05 * np.cos(3*t_samples)
-    ax.plot(ekf_x, ekf_y, "--", color="#d62728", lw=1.5, label="B6: Range-Assisted EKF")
-
-    # Draw active LiDAR beams from robot position at t=pi/2
-    rob_idx = 50
-    curr_rx, curr_ry = rx[rob_idx], ry[rob_idx]
-    ax.plot(curr_rx, curr_ry, "ro", markersize=6, label="Current Robot Pose")
-    for lm_id in [1, 5, 7]:
-        lx, ly = landmarks[lm_id]
-        ax.plot([curr_rx, lx], [curr_ry, ly], "--", color="#2ca02c", lw=0.9, alpha=0.8)
-    ax.text(curr_rx + 0.5, curr_ry - 0.8, "LiDAR Range-Bearing Beams", color="#2ca02c", fontsize=7)
+    ax.plot(gt_arr[:, 0], gt_arr[:, 1], "-", color="#1f77b4", lw=1.8, label="Ground Truth Path")
+    ax.plot(dr_arr[:, 0], dr_arr[:, 1], ":", color="#7f7f7f", lw=1.2, label="GNSS-Denied Odometry")
+    ax.plot(b6_arr[:, 0], b6_arr[:, 1], "--", color="#d62728", lw=1.5, label="B6: Range-Assisted EKF")
 
     ax.set_title("F11: Mapped Landmark LiDAR Ranging in GNSS-Denied Zone", fontsize=8.5)
     ax.set_xlabel("X Position [m]", fontsize=8)

@@ -1,0 +1,41 @@
+{
+  "dataset": "M2DGR-plus (Hybrid Benchmark)",
+  "primary_sequence": "Anomaly",
+  "description": "46.21s ground robot reference trajectory with authentic lateral displacement anomaly (t=19.1-27.3s) and synthesized sensor streams",
+  "provenance_and_integrity": {
+    "authentic_reference_ground_truth": "M2DGR-plus gt/anomaly.txt (233 poses, 46.21s duration, 7.32m path length, scalar-first quaternion wxyz)",
+    "authentic_calibration": "M2DGR-plus calibration.txt (sanitized UTF-8 full-width commas, 7 SE3 extrinsic matrices)",
+    "sensor_observations": "Ground-truth-conditioned synthetic odometry, IMU, GNSS, and top-down floor camera frames (raw M2DGR-plus rosbag requires authenticated SJTU SharePoint access)",
+    "rosbag_playback": "sample_m2dgrp_anomaly.bag (synthesized deterministic ROS 1 bag matching M2DGR-plus topic schemas)",
+    "ground_truth_leakage": "ZERO LEAKAGE: Sensor observations are pre-synthesized; estimator loop has zero access to GroundTruthTrajectory",
+    "prng_isolation": "Sensor noise RNG and visual degradation RNG are strictly isolated (np.random.default_rng)",
+    "pre_update_snapshot_fixed": "Estimator state and covariance recorded strictly AFTER measurement update for each epoch",
+    "rep105_coordinate_frames": "odom->base_link strictly continuous; global GNSS relocalizations absorbed in map->odom",
+    "counterfactual_safe_stop": "Safe-stop supervisor evaluated counterfactually on open-loop trace; physical braking verified in closed-loop simulation"
+  },
+  "official_sources": {
+    "github_plus": "https://github.com/SJTU-ViSYS/M2DGR-plus",
+    "ground_truth": "https://raw.githubusercontent.com/SJTU-ViSYS/M2DGR-plus/main/gt/anomaly.txt",
+    "calibration": "https://raw.githubusercontent.com/SJTU-ViSYS/M2DGR-plus/main/calibration.txt",
+    "full_bag_sharepoint": "https://sjtueducn-my.sharepoint.com/:u:/g/personal/594666_sjtu_edu_cn/Ef8corMuVwhJsWSpp-FXkREBrTduGBO8nifC9VEb5twHVg?e=CyEeMy"
+  },
+  "access_audit": {
+    "sharepoint_status": "Redirects to SJTU Microsoft SSO login; unauthenticated direct download is blocked without university credentials",
+    "gt_status": "Publicly verified and downloaded (233 poses, 46.21s duration, scalar-first quaternion wxyz)",
+    "calib_status": "Publicly verified and sanitized (7 coordinate frames, PINHOLE intrinsics, IMU noise)",
+    "bag_reader": "Pure-Python rosbags reader (100% ROS-independent)"
+  },
+  "sensor_topics": {
+    "odom": "/odom (nav_msgs/msg/Odometry, ground-truth-conditioned synthetic)",
+    "imu": "/imu & /camera/imu (sensor_msgs/msg/Imu, ground-truth-conditioned synthetic)",
+    "gnss": "/ublox_driver/receiver_pvt (sensor_msgs/msg/NavSatFix, ground-truth-conditioned synthetic)",
+    "camera": "Top-down synthetic floor camera (640x480, ground-truth-pose-conditioned)"
+  },
+  "anomaly_investigation": {
+    "injected_wheel_spin": "Forward wheel spin (0.28 m/s) injected at t=13.0s-18.0s",
+    "authentic_gt_lateral_anomaly": "Authentic M2DGR-plus ground-truth lateral shift (-1.53m along -Y_body with zero forward wheel motion) at t=19.12s-27.29s",
+    "outage_duration_s": 20.0,
+    "outage_start_s": 14.0,
+    "outage_end_s": 34.0
+  }
+}

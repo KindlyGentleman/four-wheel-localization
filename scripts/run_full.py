@@ -21,6 +21,8 @@ from robot_localization.simulation.scenarios import (
     create_scenario_slip,
     create_scenario_gnss_outage,
     create_scenario_combined,
+    create_scenario_compass_disturbance,
+    create_scenario_multipath,
 )
 
 
@@ -37,6 +39,8 @@ def main():
         ("Asymmetric_Wheel_Slip", lambda seed: create_scenario_slip(seed=seed, duration_s=40.0, slip_ratio_left=0.30)),
         ("GNSS_Outage_20s", lambda seed: create_scenario_gnss_outage(seed=seed, duration_s=40.0, outage_start_s=10.0, outage_end_s=30.0)),
         ("Combined_Stress", lambda seed: create_scenario_combined(seed=seed, duration_s=40.0)),
+        ("Compass_Disturbance", lambda seed: create_scenario_compass_disturbance(seed=seed, duration_s=40.0)),
+        ("GNSS_Multipath", lambda seed: create_scenario_multipath(seed=seed, duration_s=40.0)),
     ]
 
     all_summaries = []
@@ -66,6 +70,7 @@ def main():
                 "heading_rmse_deg_mean": b_stat.heading_rmse_deg_mean,
                 "heading_rmse_deg_std": b_stat.heading_rmse_deg_std,
                 "final_error_mean": b_stat.final_error_mean,
+                "coverage_95_mean": b_stat.coverage_95_mean,
                 "coverage_2sigma_mean": b_stat.coverage_2sigma_mean,
                 "mean_nees_pos": b_stat.mean_nees_pos,
             })

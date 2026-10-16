@@ -3,24 +3,24 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "four-wheel-robot-localization-ekf"
-version = "0.1.0"
-description = "EKF-based multi-sensor localization for a four-wheel mobile robot under wheel slip and GNSS outages"
+name = "four-wheel-localization"
+version = "1.0.0"
+description = "Sensor fusion and localization robustness experiments for a four-wheel mobile robot under wheel slip and GNSS outages"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Robotics & State Estimation Research Team"}
+    {name = "KindlyGentleman"}
 ]
 keywords = [
     "robotics",
-    "extended-kalman-filter",
+    "kalman-filter",
     "sensor-fusion",
     "odometry",
     "skid-steering",
     "gnss",
     "imu",
-    "state-estimation"
+    "localization"
 ]
 dependencies = [
     "numpy>=1.24.0",
@@ -28,14 +28,14 @@ dependencies = [
     "matplotlib>=3.7.0",
     "pandas>=2.0.0",
     "pyyaml>=6.0",
-    "scienceplots>=2.1.0",
+    "opencv-python>=4.8.0",
+    "pillow>=9.5.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "imageio>=2.30.0",
-    "imageio-ffmpeg>=0.4.8"
+    "scienceplots>=2.1.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -44,4 +44,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-

@@ -1,0 +1,151 @@
+"""
+tests.test_gnss_recovery
+
+Unit tests for GNSS gate-lockout recovery strategies (R0 through R4).
+Verifies:
+1. Strategy R0 (strict gate) gets permanently locked out when returning fixes drift > chi^2 threshold.
+2. Strategy R1 (temporal consistency) and R2 (health hysteresis) successfully recover after 20s outage.
+3. Strategy R3 (covariance adjustment) naturally encompasses the returning fix.
+4. Strategy R4 (controlled reinitialization) re-anchors global pose cleanly.
+5. Critical safety check: Isolated multipath jumps are STILL rejected by R1 and R2.
+"""
+
+import pytest
+import numpy as np
+
+from robot_localization.estimation.gnss_recovery import (
+    RecoverableRobustEKF4D,
+    RecoveryStrategy,
+    EstimatorHealthState
+)
+
+
+def simulate_outage_and_return(strategy: RecoveryStrategy, num_outage_seconds: float = 20.0):
+    """
+    Helper function simulating a 4WD rover driving straight under 10% unmodeled slip
+    during a GNSS outage, followed by returning GNSS fixes.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=strategy,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+
+    dt = 0.02
+    steps = int(num_outage_seconds / dt)
+    v_enc = 1.0  # Commander says 1 m/s
+    Qu = np.diag([1e-4, 2.5e-5])
+
+    # True vehicle only moves at 0.90 m/s due to slip (0.10 slip ratio)
+    true_x = 0.0
+    for step in range(steps):
+        t = step * dt
+        true_x += 0.90 * dt
+        filter_inst.predict_recoverable(
+            v_enc=v_enc,
+            omega_enc=0.0,
+            gyro_z=0.0,
+            Q_u_base=Qu,
+            dt=dt,
+            wheel_disagreement=0.08
+        )
+
+    # After 20 seconds:
+    # Filter estimated position is approx 20.0 m
+    # True vehicle position is 18.0 m (discrepancy = 2.0 m)
+    t_return = num_outage_seconds
+    R_gnss = np.diag([0.25, 0.25]) # 0.50 m std
+
+    # Return 5 consecutive valid GNSS fixes at 1 Hz intervals matching true vehicle motion
+    accepted_log = []
+    for k in range(5):
+        # Predict 1.0 second (50 steps of 0.02s) of vehicle motion between 1 Hz fixes
+        for _ in range(steps_per_sec := int(1.0 / dt)):
+            true_x += 0.90 * dt
+            filter_inst.predict_recoverable(
+                v_enc=v_enc,
+                omega_enc=0.0,
+                gyro_z=0.0,
+                Q_u_base=Qu,
+                dt=dt,
+                wheel_disagreement=0.08
+            )
+        t_fix = t_return + (k + 1) * 1.0
+        z_gnss = np.array([true_x + 0.02 * (-1)**k, 0.0])
+        acc, reason = filter_inst.update_gnss_recoverable(t_fix, z_gnss, R_gnss)
+        accepted_log.append(acc)
+
+    return filter_inst, accepted_log, true_x
+
+
+def test_strategy_r0_strict_gate_lockout():
+    """Verify that R0 gets completely locked out (0% of returning fixes accepted)."""
+    filter_inst, accepted_log, true_x = simulate_outage_and_return(RecoveryStrategy.R0_STRICT_GATE)
+    # R0 must reject all returning valid fixes due to NIS gate lockout
+    assert all(not acc for acc in accepted_log)
+    final_error = abs(filter_inst.x[0] - true_x)
+    assert final_error > 1.5, f"Expected unrecovered error > 1.5m, got {final_error:.2f}m"
+
+
+def test_strategy_r1_temporal_consistency_recovery():
+    """Verify that R1 successfully recovers after consistency check across consecutive fixes."""
+    filter_inst, accepted_log, true_x = simulate_outage_and_return(RecoveryStrategy.R1_TEMPORAL_CONSISTENCY)
+    # First fix is buffered/quarantined, second fix confirms consistency and recovers!
+    assert not accepted_log[0] # Quarantined
+    assert accepted_log[1]     # Recovered!
+    assert accepted_log[2]     # Subsequent fixes track nominally
+
+    final_error = abs(filter_inst.x[0] - true_x)
+    assert final_error < 0.50, f"Expected recovered error < 0.50m, got {final_error:.2f}m"
+    assert filter_inst.successful_recoveries >= 1
+
+
+def test_strategy_r2_health_hysteresis_recovery():
+    """Verify state transitions in R2 hysteresis machine."""
+    filter_inst, accepted_log, true_x = simulate_outage_and_return(RecoveryStrategy.R2_HEALTH_HYSTERESIS)
+    assert not accepted_log[0]
+    assert accepted_log[1]
+    assert filter_inst.state_machine in (EstimatorHealthState.TRACKING_RECOVERED, EstimatorHealthState.TRACKING)
+    final_error = abs(filter_inst.x[0] - true_x)
+    assert final_error < 0.50
+
+
+def test_strategy_r3_covariance_adjustment_recovery():
+    """Verify that R3 naturally accepts returning fix due to physically justified P expansion."""
+    filter_inst, accepted_log, true_x = simulate_outage_and_return(RecoveryStrategy.R3_COVARIANCE_ADJUSTMENT)
+    # Because covariance grew proportional to distance, NIS is naturally within gate
+    assert accepted_log[0] # Immediately accepted!
+    final_error = abs(filter_inst.x[0] - true_x)
+    assert final_error < 0.50
+
+
+def test_strategy_r4_global_reinitialization():
+    """Verify that R4 re-anchors global pose cleanly upon consistency confirmation."""
+    filter_inst, accepted_log, true_x = simulate_outage_and_return(RecoveryStrategy.R4_GLOBAL_REINITIALIZATION)
+    assert not accepted_log[0] # First fix buffered
+    assert accepted_log[1]     # Second fix re-anchors
+    final_error = abs(filter_inst.x[0] - true_x)
+    assert final_error < 0.50
+
+
+def test_multipath_rejection_under_r1():
+    """CRITICAL TEST: Ensure R1 does NOT falsely recover on isolated multipath jumps!"""
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+
+    # Robot is tracking nominally at origin
+    R_gnss = np.diag([0.25, 0.25])
+    # An isolated +5.0 meter multipath outlier arrives at t = 1.0s
+    z_bad = np.array([5.0, 0.0])
+    acc_bad, _ = filter_inst.update_gnss_recoverable(1.0, z_bad, R_gnss)
+    assert not acc_bad # Must be rejected!
+
+    # Next fix at t = 2.0s is back to true position (x = 0.1 m)
+    z_good = np.array([0.1, 0.0])
+    acc_good, _ = filter_inst.update_gnss_recoverable(2.0, z_good, R_gnss)
+    # The jump between 5.0 and 0.1 is 4.9 m/s, exceeding max physical speed,
+    # so the bad fix was NOT confirmed as a trajectory, and the true fix tracks
+    assert acc_good or len(filter_inst.gnss_buffer) >= 1

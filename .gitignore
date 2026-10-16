@@ -1,0 +1,33 @@
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Export directory (standalone publication checkout)
+four-wheel-localization/
+
+# Large media and binary bags
+*.bag
+*.mp4
+*.avi
+*.mov
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,57 @@
+# Stereo Visual-Inertial-Wheel Localization Configuration
+robot:
+  model: skid_steer_4wd
+  track_width_m: 0.45
+  effective_track_width_m: 0.42
+  wheelbase_m: 0.50
+  wheel_radius_m: 0.125
+
+sensors:
+  wheel_encoders:
+    enabled: true
+    rate_hz: 50.0
+    ticks_per_rev: 2048
+
+  imu:
+    enabled: true
+    rate_hz: 50.0
+    estimate_bias: true
+    gyro_bias_rad_s: 0.015
+    gyro_noise_std: 0.005
+
+  compass:
+    enabled: false
+    rate_hz: 10.0
+
+  gnss:
+    enabled: true
+    rate_hz: 1.0
+    horizontal_std_m: 0.50
+    lever_arm_xyz: [0.05, 0.0, 0.25]
+
+  stereo:
+    enabled: true
+    rate_hz: 10.0
+    width: 640
+    height: 480
+    fx: 400.0
+    fy: 400.0
+    cx: 320.0
+    cy: 240.0
+    baseline_m: 0.10
+    disparity_method: sgbm
+    max_features: 500
+    min_inliers: 10
+    mounting_offset_xyz: [0.20, 0.0, 0.20]
+
+  lidar:
+    enabled: false
+    rate_hz: 5.0
+
+  ultrasonic:
+    enabled: false
+    rate_hz: 10.0
+
+localization:
+  method: robust_ekf_stereo
+  frequency_hz: 50.0

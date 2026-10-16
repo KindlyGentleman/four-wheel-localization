@@ -77,6 +77,25 @@ class TrajectoryGenerator:
             # Return straight
             return speed, -0.35
 
+    @staticmethod
+    def closed_circle(t: float, speed: float = 0.8, radius: float = 2.5) -> Tuple[float, float]:
+        """Closed circular loop of radius R with period T = 2*pi*radius/speed."""
+        omega = speed / radius
+        return speed, omega
+
+    @staticmethod
+    def closed_lemniscate(t: float, duration_s: float = 12.0, scale_x: float = 4.0, scale_y: float = 3.0) -> Tuple[float, float]:
+        """Closed Gerono lemniscate figure-eight of duration duration_s."""
+        w0 = 2.0 * math.pi / duration_s
+        tau = w0 * t
+        dx = scale_x * w0 * math.cos(tau)
+        dy = 2.0 * scale_y * w0 * math.cos(2.0 * tau)
+        v = math.hypot(dx, dy)
+        ddx = -scale_x * (w0 ** 2) * math.sin(tau)
+        ddy = -4.0 * scale_y * (w0 ** 2) * math.sin(2.0 * tau)
+        omega = (dx * ddy - dy * ddx) / max(v ** 2, 1e-6)
+        return v, omega
+
 
 class SimulationWorld:
     """Container holding the environment map and trajectory generator."""

@@ -1,0 +1,54 @@
+# GNSS-Denied Rover Localization & Recovery Configuration
+robot:
+  model: skid_steer_4wd
+  track_width_m: 0.45
+  effective_track_width_m: 0.42
+  wheelbase_m: 0.50
+  wheel_radius_m: 0.125
+
+sensors:
+  wheel_encoders:
+    enabled: true
+    rate_hz: 50.0
+    ticks_per_rev: 2048
+
+  imu:
+    enabled: true
+    rate_hz: 50.0
+    estimate_bias: true
+    gyro_bias_rad_s: 0.015
+    gyro_noise_std: 0.005
+
+  compass:
+    enabled: true
+    rate_hz: 10.0
+    heading_noise_deg: 1.5
+
+  gnss:
+    enabled: true
+    rate_hz: 1.0
+    horizontal_std_m: 0.50
+    lever_arm_xyz: [0.05, 0.0, 0.25]
+    outage_intervals:
+      - [15.0, 35.0]  # 20-second complete blackout
+
+  stereo:
+    enabled: true
+    rate_hz: 10.0
+    width: 640
+    height: 480
+    baseline_m: 0.10
+    disparity_method: sgbm
+
+  lidar:
+    enabled: false
+    rate_hz: 5.0
+
+  ultrasonic:
+    enabled: false
+    rate_hz: 10.0
+
+localization:
+  method: recoverable_robust_ekf
+  recovery_strategy: R1_temporal_consistency  # Options: R0_strict_gate, R1_temporal_consistency, R2_health_hysteresis, R3_covariance_adjustment, R4_global_reinitialization
+  frequency_hz: 50.0

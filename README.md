@@ -1,237 +1,157 @@
-# EKF-Based Multi-Sensor Localization for a Four-Wheel Mobile Robot
+# Playing with Robot Localization
 
-[![Tests](https://img.shields.io/badge/pytest-21%20passed-brightgreen.svg)]()
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Format: IEEE](https://img.shields.io/badge/graphics-IEEE%20Transactions-red.svg)]()
+A small, reproducible study on mobile robot state estimation when wheel odometry slips, GNSS cuts out for 20 seconds, and visual tracking degrades.
 
-> A reproducible Python simulation investigating four-wheel robot odometry, GNSS/IMU sensor fusion, and Extended Kalman Filter (EKF) localization under realistic sensor noise, wheel slip, and measurement dropout.
+![Localization Recovery Animation](assets/localization_loop.gif)
 
----
-
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Key Features](#key-features)
-- [Repository Structure](#repository-structure)
-- [Quick Start & Reproduction](#quick-start--reproduction)
-- [Sensor Fusion Baselines](#sensor-fusion-baselines)
-- [Experimental Scenarios & Results](#experimental-scenarios--results)
-- [Scientific Figures & Demonstrations](#scientific-figures--demonstrations)
-- [Upstream Audit (PythonRobotics Reproduction)](#upstream-audit-pythonrobotics-reproduction)
-- [Documentation & Technical Reports](#documentation--technical-reports)
-- [Citation](#citation)
-- [License](#license)
+*Synchronized planar tracking across a 20-second GNSS blackout and wheel-slip segment. Left: Reference ground-truth path (white), strict innovation gate lockout (red), continuous odometry frame (green dotted), and recoverable EKF map pose with discrete frame shift (emerald solid). Right: Synthetic floor camera with live Lucas-Kanade optical flow, filter telemetry HUD, and experiment phase timeline.*
 
 ---
 
-## Project Overview
-This repository provides a modular, reproducible CPU-based Python state estimation framework for planar four-wheel-drive (4WD) skid-steered mobile robots. It investigates localization accuracy, covariance consistency, and failure modes when fusing wheel odometry with inertial, magnetic, satellite, and range sensing.
+## What I tried
 
-A central principle of this project is that **ground-truth chassis motion is integrated strictly from ground-wheel contact mechanics**, decoupling true chassis displacement from optimistic encoder readings whenever wheel slip occurs.
+Kalman filter sensor fusion looks simple on paper: predict forward with wheel kinematics, update with satellite fixes, and reject bad measurements with an innovation Mahalanobis gate:
 
-```text
-              FRONT
-          +-----------+
-   FL  O--|   LiDAR   |--O  FR  (Front Wheels: Independent Encoders #1 & #2)
-          |    IMU    |
-          |   GNSS    |
-   RL  O--|           |--O  RR  (Rear Wheels:  Independent Encoders #3 & #4)
-          +-----------+
-               REAR
-```
+$$d_M^2 = \mathbf{y}^T \mathbf{S}^{-1} \mathbf{y} \le \chi^2_{m, 1-\alpha}$$
 
----
+In textbook examples, this protects the state estimate from multipath jumps and wild outliers. But what happens when traction fails during a prolonged satellite blackout, and valid fixes return after the robot has drifted?
 
-## Key Features
-- **4 Independent Wheel Encoder Channels (50 Hz):** Simulates integer pulse quantization (2048 PPR), count jitter, and stochastic pulse loss.
-- **Skid-Steering Kinematics & Longitudinal Slip:** Explicit model of kinematic scrubbing with calibrated effective track width $b_{\text{eff}} > b$ and dynamic slip ratios $s_i \in (-\infty, 1]$.
-- **Inertial & Magnetic Sensing:**
-  - 6-DOF IMU (MPU-9250 profile, 50 Hz) with random-walk gyroscope bias and accelerometer specific force.
-  - Tilt-compensated magnetic compass (CMPS12 profile, 10 Hz) with calibration state transitions and magnetic interference injection.
-- **GNSS Receiver Simulation (1 Hz):** Local East-North-Up (ENU) coordinates, WGS-84 conversion interface, antenna lever-arm compensation, and contiguous blackout intervals.
-- **Range Sensing Extensions:** Mapped landmark 2D LiDAR range-bearing updates and 3-transducer ultrasonic planar wall detection.
-- **Extended Kalman Filters:**
-  - Standard 3-state EKF ($p_x, p_y, \theta$) with analytical Jacobians validated against numerical finite differences ($< 5 \times 10^{-11}$ error).
-  - 4-state bias-aware EKF ($p_x, p_y, \theta, b_g$) co-estimating gyroscope bias online.
-  - Joseph-stabilized covariance updates and angular innovation wrapping.
-- **Publication Deliverables:** 18 IEEE Transactions-compliant scientific figures (PDF, SVG, 300 DPI PNG) and a 1920x1080 30 FPS demonstration video (`videos/localization_demo.mp4`).
+I wanted to test this in a controlled, repeatable environment without running a full robotics simulator stack.
+
+To keep the vehicle kinematics grounded in real motion, I used the 2D ground-truth trajectory from the outdoor M2DGR `Anomaly` dataset run (Clearpath Husky rover, Shanghai Jiao Tong University). I wrote synthetic sensor generators around that reference trajectory in pure Python:
+- Four independent wheel encoders with quantization and slip injection (50 Hz)
+- Chassis IMU yaw rate with uncompensated rate bias (50 Hz)
+- Absolute GNSS position fixes with an injected 20-second blackout (1 Hz)
+- Procedural ground texture with OpenCV Lucas-Kanade feature tracking (10 Hz)
+- Synthetic stereo camera and 2D landmark LiDAR models
+
+The entire pipeline runs in standalone Python with NumPy, SciPy, Matplotlib, and OpenCV. No ROS installation is required.
 
 ---
 
-## Repository Structure
-```text
-4wd-robot-localization-ekf/
-├── README.md
-├── pyproject.toml
-├── LICENSE
-├── CITATION.cff
-├── TASKS.md
-├── DECISIONS.md
-├── configs/
-│   ├── robot.yaml               # Chassis dimensions & encoder specs
-│   ├── sensors.yaml             # Sampling rates & sensor noise params
-│   ├── nominal.yaml             # Nominal trajectory parameters
-│   ├── slip.yaml                # Asymmetric slip experiment config
-│   ├── gnss_outage.yaml         # GNSS blackout interval config
-│   └── benchmark.yaml           # Monte Carlo benchmark settings
-├── src/
-│   └── robot_localization/
-│       ├── models/              # 4WD kinematics, skid steering, numerical integration
-│       ├── sensors/             # Encoders, GNSS, CMPS12, MPU-9250, LiDAR, Ultrasonic
-│       ├── estimation/          # Dead reckoning, 3D EKF, 4D bias-aware EKF, baseline runner
-│       ├── simulation/          # World maps, event scheduler, robot simulator, scenarios
-│       ├── evaluation/          # RMSE, MAE, NEES, NIS, covariance coverage, Monte Carlo
-│       ├── visualization/       # IEEE styling, figure plotting, vector illustrations, animation
-│       └── cli.py               # Command-line entry point
-├── tests/                       # 21 comprehensive pytest unit tests
-├── scripts/
-│   ├── reproduce_reference.py   # Upstream PythonRobotics audit & reproduction
-│   ├── run_quick.py             # Deterministic scenarios E1-E9 and E12
-│   ├── run_full.py              # Multi-trial Monte Carlo benchmark with 95% CIs
-│   ├── generate_figures.py      # Programmatic generation of F01-F12 and I1-I6
-│   └── render_video.py          # 1080p demonstration video renderer
-├── figures/                     # 18 figures and illustrations (PDF, SVG, PNG)
-├── videos/                      # MP4 video, preview PNG, metadata JSON
-├── results/                     # Numerical CSV and NPZ benchmark data
-└── reports/                     # Detailed research and audit reports
-```
+## When localization fails
+
+The first lesson was that standard textbook filters fail in subtle ways when physical assumptions break.
+
+![Main Resilience Overview](assets/figure_main.png)
+
+*(a) 4WD skid-steer chassis geometry; (b) Asymmetric 50% wheel-spin slip causing severe trajectory divergence; (c) Gyroscope bias (+0.025 rad/s) causing quadratic lateral drift; (d) Error growth and step convergence across a 20-second blackout; (e) Synthetic stereo disparity and point cloud; (f) Sensor configuration ablation across 10 configurations.*
+
+1. **Wheel slip breaks dead reckoning:** When the left wheels spin with 50% slip for 5 seconds, pure odometry diverges by 11.8 m in simulation and 2.18 m peak error on the reference track.
+2. **Gyro bias bends straight lines:** An uncompensated bias of just +0.025 rad/s (1.43 deg/s) causes quadratic lateral drift, turning a straight run into a wide spiral (7.36 m RMSE).
+3. **Compass declination distorts heading:** A 25-degree magnetic disturbance pulls the standard EKF off-course by 2.29 m unless innovation gating rejects the azimuth update.
 
 ---
 
-## Quick Start & Reproduction
+## GNSS dropout and recovery
 
-### Installation
-Clone the repository and install dependencies in editable mode:
+The main experiment simulates a 20-second complete GNSS blackout ($t = 14.0$ s to $34.0$ s) while the robot experiences wheel slip ($t = 13.0$ s to $18.0$ s).
+
+![M2DGR Hybrid Benchmark Summary](assets/figure_realdata.png)
+
+*(a) Synthetic camera view with KLT optical flow; (b) Planar trajectory showing continuous odometry frame and discrete map correction arrow (REP-105); (c) Sensor availability timeline; (d) Position error over time highlighting the strict gate lockout failure; (e) Causal vision ablation under clean and degraded conditions; (f) Recovery strategy trade-off: position error vs GNSS fix acceptance.*
+
+During the blackout, the robot navigates purely on dead reckoning and IMU integration. The state error grows to roughly 2.1 m. When satellites reappear at $t = 34.0$ s, filters respond very differently:
+
+- **Strict Innovation Gate (R3 / Gate Lockout):** The filter's estimated covariance grows slower than the actual physical drift. When valid GNSS fixes resume, their innovation exceeds the 99% Chi-square threshold ($\chi^2 > 9.21$). The filter rejects every incoming fix ($0/27$ post-outage fixes accepted). The robot stays permanently lost.
+- **Ungated Standard EKF (R1):** The filter immediately accepts the first post-outage fix. However, the large innovation shock causes a transient overshoot before settling after 2.85 seconds.
+- **Temporal Consistency Window (R4):** The filter requires $M = 3$ consecutive spatially consistent fixes before triggering a state re-anchoring. It recovers within 1.86 seconds, accepts 96.3% of post-outage fixes, and avoids chasing single multipath outliers.
+- **Covariance Inflation (R6):** The filter inflates process covariance proportional to outage duration. This expands the acceptance gate dynamically and absorbs the first fix within 0.86 seconds.
+- **Global Re-initialization (R7):** Resets position directly to the verified fix. An early bug reset covariance to an identity matrix ($\mathbf{P} = \mathbf{I}$), which caused the filter to diverge to 15.3 m. Preserving positive-definite block covariance fixed this completely, achieving stable recovery at 1.09 m RMSE.
+
+---
+
+## Does vision help?
+
+A common claim in sensor fusion papers is that adding a camera improves robustness. To verify whether visual tracking actually helped localization or was just being logged as a diagnostic, I ran a causal ablation test:
+
+1. **Mode A (Vision Disabled):** Feature tracker completely turned off. Position RMSE: **1.0939 m**.
+2. **Mode B (Vision Disconnected):** Feature tracker running and extracting KLT tracks, but velocity outputs explicitly withheld from the EKF. Position RMSE: **1.0939 m**.
+   - Mode A and Mode B produce identical results to 16 decimal places. This confirms there were no hidden side-effects or leaky globals.
+3. **Mode C (Vision Connected, Clean Texture):** Visual velocity estimates fused directly into the EKF. Position RMSE drops from 1.0939 m to **0.8370 m** (a 23.5% error reduction). The visual displacement dampens the odometry wheel-spin error during the slip window.
+4. **Mode D (Vision Connected, Severe Degradation):** Gaussian noise and blur added to camera frames. Valid feature inliers drop from 286 to 59. The innovation gate identifies the noisy visual velocities and safely rejects them, falling back to the 1.0939 m baseline without diverging.
+
+---
+
+## A few numbers
+
+Summary metrics across 10-seed Monte Carlo evaluations (6 scenarios x 10 seeds x 8 estimators = 480 method-trials) and hybrid benchmark runs:
+
+| Scenario / Configuration | Pure Odometry (B0) | Bias-Aware EKF (B5) | Robust EKF (A5) | Key Observation |
+| :--- | :--- | :--- | :--- | :--- |
+| **Nominal Traction** | **0.064 m** | 0.072 m | 0.073 m | Pure odometry slightly beats EKF due to zero-drift simulation encoders. |
+| **Asymmetric Wheel Slip** | 11.795 m | **0.218 m** | 0.226 m | EKF suppresses 50% wheel slip by 54x. |
+| **Compass Disturbance** | 0.064 m | 2.292 m | **0.098 m** | Robust gating rejects 25 deg magnetic offset completely. |
+| **GNSS Multipath (5m jump)**| 0.064 m | 0.930 m | **0.092 m** | Huber gating rejects sudden satellite coordinate jumps. |
+| **20s GNSS Outage** | 1.341 m | 1.584 m | 2.094 m | Strict gating in A5 causes gate lockout during recovery. |
+| **Combined Stress** | 11.925 m | 0.578 m | **0.540 m** | Robust EKF provides best overall balance in multi-fault stress. |
+| **Hybrid Outage (R4 Recoverable)** | 1.391 m | 1.094 m | 1.362 m (Lockout)| Temporal recovery restores tracking in 1.86s (96.3% fix acceptance). |
+| **Hybrid Outage (R4 + Vision)** | 1.391 m | **0.837 m** | N/A | Fusing visual velocity dampens slip drift by 23.5%. |
+
+---
+
+## What still does not work
+
+Being honest about failure modes is more informative than claiming a universal solution:
+
+1. **Pure odometry beats fusion in ideal conditions:** In simulated nominal conditions with white encoder noise and zero slip, pure wheel odometry achieved 0.064 m error, while the EKF achieved 0.072 m. Fusing noisy IMU and GNSS measurements added small perturbations. Sensor fusion only helped once unmodeled disturbances (slip, bias) appeared.
+2. **Gate lockout is a real trap:** If an innovation gate is tuned too strictly ($\chi^2 \le 9.21$), it will permanently reject all post-blackout GNSS fixes after a 20-second drift. Without adaptive covariance or temporal re-anchoring, the filter never recovers.
+3. **Floor texture dependency:** The visual velocity module assumes the ground plane has visible features. Over featureless concrete or dark asphalt, inlier count collapses and vision falls back completely to wheel odometry.
+4. **Counterfactual safe-stop:** The included safe-stop controller issues emergency stop commands ($v_{\mathrm{cmd}} = 0$) within 2.0 seconds of covariance divergence. In real-world operation this stops the robot. In the hybrid benchmark, the reference trajectory continues unbraked because it replays fixed kinematic recordings.
+
+---
+
+## Reproduce
+
+Clone the repository and install dependencies in an isolated Python environment:
+
 ```bash
-git clone https://github.com/reproduction/4wd-robot-localization-ekf.git
-cd 4wd-robot-localization-ekf
-pip install -e .[dev]
+git clone https://github.com/KindlyGentleman/four-wheel-localization.git
+cd four-wheel-localization
+
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install -e .
 ```
 
-### 1. Run Unit Tests (21 Tests)
-Verify analytical Jacobians, kinematics, sensor models, and filter updates:
-```bash
-python -m pytest tests/ -v
-```
+Run tests and experiments:
 
-### 2. Reproduce Upstream Reference & Audit
 ```bash
-python scripts/reproduce_reference.py
-```
+# 1. Run all 71 unit and regression tests (~35s)
+python -m pytest tests/
 
-### 3. Run Experimental Scenarios (E1 - E9, E12)
-```bash
+# 2. Run the hybrid benchmark and causal vision ablation (~12s)
+python realdata.py
+
+# 3. Run the quick multi-scenario benchmark (~20s)
 python scripts/run_quick.py
-```
 
-### 4. Run Monte Carlo Statistical Trials
-```bash
+# 4. Run the complete 480-trial Monte Carlo benchmark (~3 min)
 python scripts/run_full.py
-```
 
-### 5. Generate Publication Figures & Illustrations
-```bash
+# 5. Regenerate all IEEE publication figures and illustrations
 python scripts/generate_figures.py
+python scripts/generate_figure_realdata.py
+python scripts/generate_resilience_figure.py
+python scripts/generate_figure_tradeoffs.py
+
+# 6. Render the animation GIF
+python scripts/render_realdata_gif.py
+
+# Or use the unified reproduction CLI:
+python reproduce.py --quick
+python reproduce.py --real-data
+python reproduce.py --map
+python reproduce.py --figure
+python reproduce.py --gif
 ```
 
-### 6. Render 1080p Demonstration Video
-```bash
-python scripts/render_video.py
-```
-
 ---
 
-## Sensor Fusion Baselines
+## References
 
-| Baseline | Inputs & Prediction | Measurement Updates | State Vector |
-|---|---|---|---|
-| **B0** | 4-Wheel Encoders | None (Dead Reckoning) | $[p_x, p_y, \theta]^T$ |
-| **B1** | Wheel Speed + Gyro $Z$ | None (Prediction Only) | $[p_x, p_y, \theta]^T$ |
-| **B2** | 4-Wheel Encoders | 1 Hz GNSS Position | $[p_x, p_y, \theta]^T$ |
-| **B3** | Wheel Speed + Gyro $Z$ | 1 Hz GNSS Position | $[p_x, p_y, \theta]^T$ |
-| **B4** | Wheel Speed + Gyro $Z$ | 1 Hz GNSS + 10 Hz Compass | $[p_x, p_y, \theta]^T$ |
-| **B5** | Wheel Speed + Gyro $Z$ | 1 Hz GNSS + 10 Hz Compass | $[p_x, p_y, \theta, b_g]^T$ |
-
----
-
-## Experimental Scenarios & Results
-
-Summary of 2D Position RMSE (meters) and Heading RMSE (degrees) across benchmark scenarios:
-
-| Scenario | B0 (Odometry) | B1 (Odom+Gyro) | B3 (Primary EKF) | B4 (+Compass) | B5 (Bias-Aware) |
-|---|---|---|---|---|---|
-| **E1: Nominal** | 0.064 m (0.18°) | 7.347 m (29.7°) | 0.616 m (9.32°) | **0.097 m** (0.53°) | 0.114 m (**0.37°**) |
-| **E2: Radius Error (5%)** | 25.74 m (108.8°) | 7.347 m (29.7°) | 0.616 m (9.31°) | **0.097 m** (0.53°) | 0.113 m (**0.37°**) |
-| **E3: Isolated FL Slip** | 17.01 m (72.76°) | 5.116 m (29.5°) | 0.815 m (12.39°) | 0.211 m (0.54°) | **0.198 m** (**0.38°**) |
-| **E4: Differential Left Slip**| 13.77 m (63.47°) | 4.938 m (29.3°) | 0.781 m (12.92°) | 0.175 m (0.54°) | **0.171 m** (**0.38°**) |
-| **E5: Gyro Bias (+2°/s)** | 0.064 m (0.18°) | 15.75 m (68.9°) | 1.635 m (22.21°) | **0.093 m** (1.11°) | 0.114 m (**0.37°**) |
-| **E6: Compass Fault (+35°)** | 0.064 m (0.18°) | 7.347 m (29.7°) | **0.616 m** (9.32°) | 2.568 m (16.31°) | 2.585 m (17.14°) |
-| **E8: 20s GNSS Outage** | 1.341 m (4.13°) | 7.770 m (29.7°) | 2.466 m (16.85°) | 1.614 m (0.53°) | **1.594 m** (**0.37°**) |
-| **E12: Combined Stress** | 11.93 m (76.84°) | 7.426 m (49.2°) | 1.537 m (23.92°) | 0.547 m (0.81°) | **0.530 m** (**0.38°**) |
-
----
-
-## Scientific Figures & Demonstrations
-
-### Figure Catalog (`figures/`)
-- **F01:** Four-wheel mobile robot architecture schematic
-- **F02:** Multi-sensor EKF sensor fusion block diagram
-- **F03:** Synchronized 4-wheel encoder linear speed traces under slip
-- **F04:** Four-wheel odometry drift comparison against ground truth
-- **F05:** Progressive sensor fusion trajectories (B0, B1, B3, B4)
-- **F06:** Gyroscope bias estimation and error mitigation over time
-- **F07:** Error growth and filter recovery across 20-second GNSS outage
-- **F08:** Position RMSE vs. longitudinal slip severity
-- **F09:** Sensor configuration ablation bar chart (E12 combined stress)
-- **F10:** Filter consistency evaluation (NEES & NIS vs. theoretical bounds)
-- **F11:** Mapped landmark LiDAR ranging in GNSS-denied zones
-- **F12:** Combined failure interaction trajectories and errors
-
-### Research Illustrations (`figures/`)
-- **I1:** Robot sensor layout and coordinate frames ($\{W\}, \{B\}, \{L\}$)
-- **I2:** Four-wheel skid-steer odometry geometry & effective track width
-- **I3:** Discrete Extended Kalman Filter state flow
-- **I4:** Longitudinal wheel slip mechanics vs. encoder observation
-- **I5:** GNSS blackout uncertainty growth and convergence dynamics
-- **I6:** Mapped landmark range-bearing observation geometry
-
-### Demonstration Video (`videos/`)
-- **File:** `videos/localization_demo.mp4` (1920x1080, 30 FPS, H.264)
-- **Preview:** `videos/localization_demo_preview.png`
-- **Metadata:** `videos/video_metadata.json`
-
----
-
-## Upstream Audit (PythonRobotics Reproduction)
-An in-depth mathematical audit of the upstream reference (`extended_kalman_filter.py` by Atsushi Sakai et al.) revealed:
-1. **Covariance-versus-Standard-Deviation Multiplication:** Upstream defines `GPS_NOISE = np.diag([0.5, 0.5]) ** 2` and then computes `z = observation_model(xTrue) + GPS_NOISE @ randn(2, 1)`. Because the covariance matrix is squared prior to multiplying by standard normal variates, the actual simulated noise standard deviation is $0.25\text{ m}$ rather than $0.50\text{ m}$. Meanwhile, the filter assumes $R = \text{diag}([1.0, 1.0])^2 = 1.0\text{ m}^2$, creating a $16\times$ over-estimation of measurement variance.
-2. **Redundant State Vector:** Upstream includes velocity $v$ in state vector $x=[p_x, p_y, \theta, v]^T$, but simply overwrites $v_k = 1.0 \cdot u_v$ rather than propagating state dynamics.
-3. Detailed derivation and empirical comparisons are reported in [`reports/REFERENCE_AUDIT.md`](reports/REFERENCE_AUDIT.md).
-
----
-
-## Documentation & Technical Reports
-- [`reports/REFERENCE_AUDIT.md`](reports/REFERENCE_AUDIT.md): Detailed audit and reproduction of PythonRobotics 2D EKF.
-- [`reports/MODEL_VALIDATION.md`](reports/MODEL_VALIDATION.md): Kinematic derivations and finite-difference Jacobian verification.
-- [`reports/SENSOR_ASSUMPTIONS.md`](reports/SENSOR_ASSUMPTIONS.md): Sensor noise parameters, rates, and coordinate transforms.
-- [`reports/EXPERIMENTAL_PROTOCOL.md`](reports/EXPERIMENTAL_PROTOCOL.md): Benchmark setup and metric definitions.
-- [`reports/RESULTS.md`](reports/RESULTS.md): Full empirical tables and comparative analysis.
-- [`reports/STATISTICAL_VALIDATION.md`](reports/STATISTICAL_VALIDATION.md): NEES, NIS, and covariance consistency analysis.
-- [`reports/NOVELTY_AND_LIMITATIONS.md`](reports/NOVELTY_AND_LIMITATIONS.md): Formal non-claims, novelty bounds, and modeling limits.
-- [`reports/REPRODUCIBILITY.md`](reports/REPRODUCIBILITY.md): Step-by-step reproduction instructions.
-- [`reports/MINI_PAPER.md`](reports/MINI_PAPER.md): Complete scholarly research manuscript draft.
-
----
-
-## Citation
-```bibtex
-@misc{four_wheel_robot_ekf_2026,
-  author = {Research Reproduction Team},
-  title = {EKF-Based Multi-Sensor Localization for a Four-Wheel Mobile Robot},
-  year = {2026},
-  url = {https://github.com/reproduction/4wd-robot-localization-ekf}
-}
-```
-
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- M2DGR Dataset: Yin, J. et al., "M2DGR: A Multi-sensor and Multi-scenario SLAM Dataset for Ground Robots", IEEE Robotics and Automation Letters (RA-L), 2022.
+- ROS REP-105: "Coordinate Frames for Mobile Platforms" (Foote, 2010).
+- Bar-Shalom, Y., Li, X. R., and Kirubarajan, T., *Estimation with Applications to Tracking and Navigation*, John Wiley & Sons, 2001.
+- Thrun, S., Burgard, W., and Fox, D., *Probabilistic Robotics*, MIT Press, 2005.
