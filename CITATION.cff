@@ -1,8 +1,0 @@
-cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
-authors:
-  - family-names: "Research Reproduction Authors"
-title: "EKF-Based Multi-Sensor Localization for a Four-Wheel Mobile Robot"
-version: 0.1.0
-date-released: 2026-10-15
-url: "https://github.com/reproduction/4wd-robot-localization-ekf"
