@@ -19,6 +19,7 @@ four-wheel-localization/
 *.mp4
 *.avi
 *.mov
+*.gif
 videos/
 extras/
 AUDIT.md
