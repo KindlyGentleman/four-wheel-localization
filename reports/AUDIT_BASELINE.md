@@ -1,120 +1,128 @@
-# Forensic Baseline Inventory and Audit Report
+# Baseline Audit and Reality Rebase Report
 
-## 1. Executive Identification and Environment
-
-- Target Repository: `four-wheel-localization` (4WD Mobile Robot Multi-Sensor Fusion & Outage Recovery)
-- Audit Commit SHA: `73b0622` (branch: `audit-scientific-repair`, checked out from `main`)
-- Operating System: Windows 11 (build 10.0.26100), Shell: PowerShell (pwsh)
-- Python Runtime: Python 3.13.7 (CPython 64-bit)
-- Host Hardware: 13th Gen Intel(R) Core(TM) i7-13620H (10 physical cores, 16 logical threads)
-- System Memory: 15.73 GB Total Physical RAM, 1.99 GB Available Physical RAM (strict CPU and memory budgeting active)
-- Primary Installed Packages: numpy 2.5.3, scipy 1.16.2, matplotlib 3.10.7, pandas 2.3.3, opencv-python 4.14.0.94, rosbags 0.11.7, open3d 0.20.0, scienceplots 2.1.1, pytest 9.1.1
+**Date:** 2026-10-17  
+**Auditor:** Senior Robotics Research Scientist & Independent Scientific Auditor  
+**Repository Working Directory:** `d:\03_Proyek\Kalman_Filter`  
+**Current Branch:** `remediation-adversarial-audit`  
+**Baseline Commit SHA:** `047430c946311095ba4bf212e625b95eed7230fd`  
+**Working Tree Status:** Clean  
+**Runtime Environment:** Windows 11 AMD64, Python 3.13.7, CPU-only (NumPy 2.2.6, SciPy 1.15.2, OpenCV 4.12.0)  
 
 ---
 
-## 2. Repository Architecture and Benchmark Call Graph
+## 1. Test Suite Baseline Execution
 
-The framework provides multi-sensor fusion, fault recovery, and 2D dead-reckoning state estimation for a 4-wheel skid-steer rover.
-
-### Module Call Graph
-- `src/robot_localization/models/`: Skid-steer kinematics (`skid_steer.py`), 4WD configuration (`robot_4wd.py`), and planar SE(2) integration (`kinematics.py`).
-- `src/robot_localization/sensors/`: Simulated sensor suites: four encoders (`encoder.py`), MPU-9250 IMU (`mpu9250.py`), CMPS12 compass (`cmps12.py`), GNSS receiver (`gnss.py`), 2D landmark LiDAR (`lidar.py`), ultrasonic raycaster (`ultrasonic.py`), stereo camera and ICP (`stereo.py`).
-- `src/robot_localization/simulation/`: Multi-rate event scheduler (`scheduler.py`), discrete simulation loop (`robot_simulator.py`), standardized stress scenarios (`scenarios.py`).
-- `src/robot_localization/estimation/`:
-  - `dead_reckoning.py`: Open-loop 4-wheel kinematic odometry.
-  - `ekf.py`: Standard 3D EKF ($[x, y, \theta]$).
-  - `bias_aware_ekf.py`: 4D EKF estimating position, heading, and constant gyro bias ($[x, y, \theta, b_g]$).
-  - `robust_ekf.py`: 4D EKF with Chi-square innovation gating and wheel-slip covariance scaling.
-  - `ukf.py`: Unscented Kalman Filter with circular manifold mean computation.
-  - `gnss_recovery.py`: `RecoverableRobustEKF4D` implementing strategies R0 (Strict Gate), R1 (Temporal Consistency), R2 (Health Hysteresis), R3 (Covariance Adjustment), and R4 (Global Reinitialization).
-  - `particle_filter.py`: Fixed particle filter and `AMCLAdaptiveParticleFilter2D` with KLD-sampling and dual-rate likelihood tracking.
-  - `range_assisted_ekf.py`: Range-only EKF aiding from known landmark anchors.
-- `src/robot_localization/control/`: Counterfactual safety supervisor (`fail_safe.py`) monitoring covariance divergence and commanding deceleration.
-- `src/robot_localization/evaluation/`: Metric computation (`metrics.py`: RMSE, MAE, NEES, NIS, confidence coverage) and paired Monte Carlo evaluation (`monte_carlo.py`).
-- `realdata.py`: Hybrid pose-conditioned benchmark executing 46.2-second SJTU-ViSYS M2DGR-plus rover trajectory (`anomaly.txt`) with synthetic sensor synthesis, KLT optical flow, and recovery configurations R0 to R7.
-
----
-
-## 3. Forensic Issue Verification Matrix (F01 to F18)
-
-Every suspected finding from the code review has been independently inspected in the current source code:
-
-| Finding ID | Initial Priority | Status | Source Location | Root Cause Mechanism | Scientific / Engineering Impact |
-|:---|:---|:---|:---|:---|:---|
-| **F01** | P0 | **CONFIRMED** | `realdata.py:34-35`, `requirements.txt`, `pyproject.toml` | `realdata.py` imports `from rosbags.rosbag1 import Reader, Writer` at top level, but `rosbags` is absent from `requirements.txt` and `pyproject.toml`. | Fresh virtual environments fail immediately on `import realdata` or `python reproduce.py --real-data`. |
-| **F02** | P0 | **CONFIRMED** | `src/robot_localization/sensors/stereo.py:756-766` | When Open3D is unavailable, `register_point_clouds_icp()` returns hardcoded `success=True`, `fitness=0.80`, `inlier_rmse_m=0.08`, without computing any registration. | Fabricates successful registration and synthetic metrics without performing estimation. |
-| **F03** | P0 | **CONFIRMED** | `tests/test_stereo.py:138-162` | `test_point_cloud_icp_registration` asserts `dx_m == -0.08` and `dy_m == -0.03`. When Open3D is missing, the fallback returned `0.0`, failing the test. | Test suite passes only because Open3D happened to be pre-installed in the auditor's local Python environment. |
-| **F04** | P1 | **CONFIRMED** | `scripts/generate_figure_realdata.py:297-301` | Inlier ratio in `realdata_summary.csv` is stored as a unit fraction [0, 1] (e.g. 0.9719), but plotted directly on an axis labeled `(%)` with limit [0, 115]. | Renders a bar of height 0.97% instead of 97.2%, making inlier bars visually invisible and misleading. |
-| **F05** | P1 | **CONFIRMED** | `scripts/generate_figure_realdata.py:307-310` | For moderate degradation connected vision, the script repeats `float(r_clean_conn["pos_rmse_m"])` because `R4_vision_connected_moderate` was never run or recorded in `realdata_summary.csv`. | Copies clean-vision RMSE (0.837 m) into moderate degradation without running the experiment. |
-| **F06** | P1 | **CONFIRMED** | `scripts/generate_figure_realdata.py:298-310` | Script uses inline fallbacks (`else 97.2`, `else 1.094`, `else 0.837`) when CSV records are missing. | Silently outputs plausible-looking figures even when source data is missing or corrupted. |
-| **F07** | P1 | **CONFIRMED** | `results/full_monte_carlo_summary.csv:23,31`, `bias_aware_ekf.py:124`, `robust_ekf.py:98` | Process noise covariance during outage is tiny ($q_{pos} = 10^{-4}$ in `BiasAwareEKF4D` and $0.0025$ in `RobustEKF4D`), growing covariance by only 4 to 22 cm over 20s, while vehicle drifts 2.0 m. | Mean position NEES explodes to 41.3 (Combined) and 320.5 (20s Outage); empirical 95% coverage collapses to 4.6% to 9.3%. Filter covariance is grossly overconfident. |
-| **F08** | P1 | **CONFIRMED** | `README.md:55`, `realdata.py:340-410` | README claims sensor rates: Encoders (50 Hz), IMU (50 Hz), Camera (10 Hz), GNSS (1 Hz). `data/anomaly.txt` has only 233 points over 46.2s ($dt \approx 0.199$s, ~5 Hz). `realdata.py` loops over GT epochs, so actual effective rates are 5 Hz, 5 Hz, 5 Hz, and 2.5 Hz. | Documentation misleads readers regarding the actual temporal sampling of the hybrid benchmark. |
-| **F09** | P1 | **CONFIRMED** | `src/robot_localization/estimation/gnss_recovery.py:73`, `README.md:66` | Code specifies `consistency_window_size: int = 2` as default. `README.md` documents $M = 3$ consecutive fixes required. | Code and documentation contradict each other on the consistency buffer size. |
-| **F10** | P1 | **CONFIRMED** | `src/robot_localization/estimation/particle_filter.py:418-436` | `AMCLAdaptiveParticleFilter2D.update_scan_adaptive()` calls `super().update_scan()` which already calls `resample_systematic()`, resetting weights to $1/N$. It then executes `_kld_resample_and_inject()` which samples from the already-flattened weights. | Performs duplicate resampling, depleting particle diversity and distorting KLD-sampling. |
-| **F11** | P1 | **CONFIRMED** | `tests/test_gnss_recovery.py:131-152` | Recovery tests only test an isolated 1-epoch spike. Two consecutive correlated multipath outliers bypass `_check_buffer_consistency()` and trigger false recovery. | Insufficient test coverage for correlated false fixes and subtle drift failure modes. |
-| **F12** | P1 | **CONFIRMED** | `realdata.py:820-826`, `fail_safe.py` | Safe-stop controller generates $v_{cmd} = 0$, but the robot trajectory is a pre-recorded dataset replay that continues moving regardless of commands. | Safe-stop is open-loop counterfactual; vehicle does not stop in the benchmark. |
-| **F13** | P1 | **CONFIRMED** | `realdata.py:554-575` | `generate_synthetic_scene_image()` takes `pose = (x, y, yaw)` but completely ignores `yaw`. The checkerboard and landmarks translate purely in 2D without rotating when the rover turns. | Camera motion synthesis does not represent true camera rotation or calibrated 3D vehicle motion. |
-| **F14** | P2 | **CONFIRMED** | `reports/`, `PRE_PUSH_CHECK.md`, `README.md` | Discrepancies exist between report claims, test counts, parameter settings, and gitignore configuration. | Historical audit documents conflict with current repository code. |
-| **F15** | P2 | **CONFIRMED** | `data/anomaly.txt`, `data/calibration.txt`, `LICENSE` | Trajectory and calibration files from SJTU-ViSYS M2DGR-plus are stored directly in `data/`, but repository only has a generic MIT license with no explicit attribution to M2DGR authors. | Academic attribution and third-party dataset provenance must be clearly documented. |
-| **F16** | P2 | **CONFIRMED** | `scripts/run_quick.py`, `scripts/run_full.py`, `monte_carlo.py` | Statistical aggregation treats correlated time-series steps as independent samples for coverage, while trial-to-trial averaging must use independent random seeds. | Statistical evaluation methodology requires clear documentation of sample independence. |
-| **F17** | P2 | **CONFIRMED** | `gnss_recovery.py:338-339, 448-450`, `ros2_mock.py` | Relocalization updates `map_to_odom[:2] += jump` as a simple translation addition, ignoring SE(2) rotation composition. `ros2_mock.py` lacks general transform composition lookup. | Incomplete ROS REP-105 transform composition semantics. |
-| **F18** | P2 | **CONFIRMED** | `tests/` | Prior tests verify nominal happy paths and pre-expected numbers, but lack adversarial checks for duplicate resampling, fallback ICP, or yaw rotation in vision. | Test suite gave false confidence of total system correctness. |
+Executed command:
+```bash
+python -m pytest -q
+```
+**Result:** 83 passed in 26.52s across 15 test files:
+- `tests/test_audit_verification.py` (7 tests)
+- `tests/test_core.py` (7 tests)
+- `tests/test_dependencies_smoke.py` (2 tests)
+- `tests/test_gnss_recovery.py` (10 tests)
+- `tests/test_p0_foundation.py` (9 tests)
+- `tests/test_p1_sensors_fusion.py` (7 tests)
+- `tests/test_p2_range_sensors.py` (5 tests)
+- `tests/test_realdata.py` (5 tests)
+- `tests/test_refinement.py` (6 tests)
+- `tests/test_ros2_mock.py` (4 tests)
+- `tests/test_safe_stop.py` (6 tests)
+- `tests/test_sensor_registry.py` (6 tests)
+- `tests/test_stereo.py` (9 tests)
 
 ---
 
-## 4. Test Baseline
+## 2. Forensic Investigation of Newly Identified Defects
 
-Execution command: `python -m pytest tests/ -v`
-- Total tests collected: 71
-- Total tests passed: 71
-- Total tests failed: 0
-- Execution duration: 33.75s
-- Status: Pre-existing tests pass in the current environment only because optional dependencies (`rosbags`, `open3d`) happen to be present in the host environment. Clean-environment behavior fails on F01 and F03.
+While the previous audit resolved structural packaging defects (F01), fabricated ICP fallbacks (F02/F03), and figure-plotting inconsistencies (F04-F06), deep mathematical and algorithmic inspection confirms 10 critical remaining defects:
+
+### Defect 1: Unmeasured `false_recoveries` Metric (Priority P0)
+- **Location:** `src/robot_localization/estimation/gnss_recovery.py` line 117 and `realdata.py` lines 1033, 1159.
+- **Defect:** `self.false_recoveries` is initialized to 0 in `RecoverableRobustEKF4D.__init__`, but is never incremented anywhere in the codebase.
+- **Impact:** `realdata.py` extracts `est.false_recoveries` and writes `false_recoveries: 0` to CSV and summary tables. Reporting an unmeasured safety metric as zero is a serious scientific integrity violation.
+
+### Defect 2: Adversarial Persistent GNSS Coordinate Bias (Priority P1)
+- **Location:** `src/robot_localization/estimation/gnss_recovery.py` `_check_buffer_consistency()`.
+- **Defect:** The vector displacement check evaluates $\Delta \mathbf{p}_{\mathrm{gnss}} - \Delta \mathbf{p}_{\mathrm{dr}}$. For a persistent constant bias $\mathbf{z}_k = \mathbf{p}_k + \mathbf{b}$, $\Delta \mathbf{p}_{\mathrm{gnss}} \approx \Delta \mathbf{p}_{\mathrm{dr}}$.
+- **Impact:** The relative consistency buffer accepts persistent multipath offsets and re-anchors the robot to an arbitrary false global position.
+
+### Defect 3: Sequential Bayesian Particle Weight Erasure (Priority P1)
+- **Location:** `src/robot_localization/estimation/particle_filter.py` `compute_scan_weights()`.
+- **Defect:** Lines 310-318 overwrite `self.weights = weights_unnorm / total_w`.
+- **Impact:** In sequential Monte Carlo filtering without resampling, weights must accumulate: $w_k^{(i)} \propto w_{k-1}^{(i)} p(z_k \mid x_k^{(i)})$. Overwriting weights erases all prior posterior information whenever resampling is skipped.
+
+### Defect 4: AMCL Recovery Likelihood Distortion via Relative Normalization (Priority P1)
+- **Location:** `src/robot_localization/estimation/particle_filter.py` lines 312, 440-445.
+- **Defect:** `avg_likelihood` is computed from `weights_unnorm = np.exp(log_weights - max_log)`.
+- **Impact:** Because $\max(\text{weights\_unnorm}) \equiv 1.0$, `avg_likelihood` is always normalized relative to the scan's best particle. Under severe kidnapping or sensor failure where all particles have poor absolute likelihood, `w_fast` and `w_slow` track identical relative values, preventing random particle recovery injection.
+
+### Defect 5: Full-Pose NEES Neglects Position-Heading Covariance (Priority P1/P2)
+- **Location:** `src/robot_localization/evaluation/metrics.py` line 85.
+- **Defect:** `nees_pose = nees_pos + (dtheta ** 2 / var_th)`.
+- **Impact:** Ignores off-diagonal cross-covariances between position and orientation ($\mathbf{P}_{x\theta}, \mathbf{P}_{y\theta}$). Full-state NEES must be $\mathbf{e}_k^T \mathbf{P}_k^{-1} \mathbf{e}_k$.
+
+### Defect 6: Stereo Reprojection Matrix Sign and Ignored Mounting RPY (Priority P2)
+- **Location:** `src/robot_localization/sensors/stereo.py` lines 69, 86-101.
+- **Defect:** `q_matrix` has $Q_{3,2} = -1.0 / B$, which produces negative depth $Z = -f B / d$ for positive disparities. Furthermore, `mounting_rpy_rad` is declared on `StereoCameraConfig` but ignored by `transform_optical_to_base` and `transform_base_to_optical`.
+
+### Defect 7: Incomplete ROS REP-105 Transform Continuity (Priority P1)
+- **Location:** `src/robot_localization/estimation/gnss_recovery.py` lines 242-250.
+- **Defect:** `self.map_to_odom` is only computed during large recovery jumps. During nominal GNSS updates, `self.x` updates via Kalman gain while `odom_pose` and `map_to_odom` remain unchanged.
+- **Impact:** Violates the REP-105 invariant $T_{\mathrm{map}}^{\mathrm{base}} = T_{\mathrm{map}}^{\mathrm{odom}} \cdot T_{\mathrm{odom}}^{\mathrm{base}}$ during nominal tracking.
+
+### Defect 8: Safety Supervisor Premature Standstill Declaration (Priority P1)
+- **Location:** `src/robot_localization/control/fail_safe.py` lines 150-155.
+- **Defect:** Transition to `STANDSTILL_HOLD` checks `if at_standstill or abs(self.current_v) < 1e-3:`.
+- **Impact:** When the commanded braking ramp reaches zero (`self.current_v < 1e-3`), the supervisor declares `STANDSTILL_HOLD` even if measured velocity `v_measured` is still non-zero (e.g. vehicle sliding or decelerating late).
+
+### Defect 9: Overstated Visual-Fusion Methodology (Priority P1)
+- **Location:** `realdata.py` lines 882-890.
+- **Defect:** Vision-assisted localization in `realdata.py` is implemented as an empirical wheel-speed dampener `v_eff = (1 - alpha) * v_wheel + alpha * vo_speed`, not a Kalman measurement update with an innovation gate.
+- **Impact:** Calling this an "innovation gate" in documentation is factually inaccurate.
+
+### Defect 10: GNSS Update Cadence Discrepancy (Priority P2)
+- **Location:** `realdata.py` line 919 and `README.md`.
+- **Defect:** Main hybrid experiment samples GNSS via `if i % 5 == 0:`. Given 5.02 Hz native data, GNSS cadence is ~1.00 Hz, while `README.md` claimed 2.5 Hz.
 
 ---
 
-## 5. Numerical Baseline
+## 3. Prior Issue Status Matrix
 
-### Hybrid Benchmark (`results/realdata_summary.csv`):
-- R0 (Dead Reckoning): 1.391 m Position RMSE, 19.03 deg Heading RMSE, Peak Outage Error: 2.181 m
-- R1 (Standard EKF): 1.023 m Position RMSE, 8.18 deg Heading RMSE, Recovery Time: 2.853 s
-- R3 (Strict Gated EKF): 1.362 m Position RMSE, 13.76 deg Heading RMSE, Recovery Success: False (Gate Lockout, 0% post-outage fixes accepted)
-- R4 (Temporal Consistency): 1.094 m Position RMSE, 11.62 deg Heading RMSE, Recovery Time: 1.857 s (96.3% fix acceptance)
-- R6 (Covariance Adjustment): 1.056 m Position RMSE, 10.45 deg Heading RMSE, Recovery Time: 0.859 s (100% fix acceptance)
-- R4 Connected Vision (Clean): 0.837 m Position RMSE (reported 23.5% error reduction)
-- R4 Connected Vision (Severe): 1.094 m Position RMSE (reported safe fallback)
-- R4 Connected Vision (Moderate): Missing from CSV; fabricated in figure as 0.837 m copy of clean vision.
-
-### Monte Carlo Consistency Benchmark (`results/full_monte_carlo_summary.csv`):
-- Nominal Traction (Bias-Aware EKF): Pos RMSE: 0.072 m, 95% Coverage: 100.0%, Mean NEES: 0.865
-- Nominal Traction (Robust EKF): Pos RMSE: 0.073 m, 95% Coverage: 100.0%, Mean NEES: 0.896
-- GNSS Outage 20s (Bias-Aware EKF): Pos RMSE: 1.584 m, 95% Coverage: 4.63%, Mean NEES: 320.54
-- GNSS Outage 20s (Robust EKF): Pos RMSE: 2.094 m, 95% Coverage: 4.75%, Mean NEES: 66.33
-- Combined Stress (Bias-Aware EKF): Pos RMSE: 0.578 m, 95% Coverage: 9.35%, Mean NEES: 41.30
-- Combined Stress (Robust EKF): Pos RMSE: 0.540 m, 95% Coverage: 28.72%, Mean NEES: 15.53
-
----
-
-## 6. Known Reproducibility Blockers
-
-1. Packaging Blocker: `rosbags` missing from `pyproject.toml` and `requirements.txt`.
-2. Hardware/CPU Blocker: `register_point_clouds_icp()` requires Open3D; when absent, returns fake numbers rather than computing actual 2D registration.
-3. Visualization Blocker: Plotting script divides percentage by 100 on percentage axis and fabricates moderate degradation result.
-4. Estimator Consistency Blocker: Severe underestimation of covariance during blackout and slip.
-5. Algorithmic Blocker: AMCL duplicate resampling disrupts KLD particle adaptation.
+| Initial ID | Description | Current Status in `047430c` | Needs Further Remediation? |
+|:---|:---|:---|:---|
+| F01 | `rosbags` packaging dependency | Verified fixed | No |
+| F02 | ICP fallback fabricated metrics | Verified fixed | No |
+| F03 | Open3D optional decoupling | Verified fixed | No |
+| F04 | Inlier ratio percentage axis scaling | Verified fixed | No |
+| F05 | Moderate degradation benchmark execution | Verified fixed | No |
+| F06 | Hardcoded CSV fallback elimination | Verified fixed | No |
+| F07 | Covariance overconfidence diagnosis | Documented limitation | Yes (metrics & filter models) |
+| F08 | Cadence documentation vs code | Partially fixed | Yes (GNSS cadence 1 Hz vs 2.5 Hz) |
+| F09 | Window size default vs README | Verified fixed | No |
+| F10 | AMCL duplicate resampling | Partially fixed | Yes (Bayesian weight accumulation & likelihood) |
+| F11 | Adversarial GNSS multipath tests | Partially fixed | Yes (persistent bias failure mode) |
+| F12 | Counterfactual safe stop | Partially fixed | Yes (supervisor standstill semantics) |
+| F13 | 2D camera motion assumption | Documented limitation | No |
+| F14 | Documentation harmony | Partially fixed | Yes (align with new findings) |
+| F15 | Dataset attribution | Verified fixed | No |
+| F16 | Duration and coverage metrics | Verified fixed | No |
+| F17 | SE(2) composition in recovery | Partially fixed | Yes (nominal updates violate invariant) |
+| F18 | Regression test coverage | Verified fixed (83 tests) | Yes (add tests for new findings) |
 
 ---
 
-## 7. Staged Remediation Plan
+## 4. Execution Plan & Priorities
 
-- **Phase 1 (Dependencies and Packaging):** Add `rosbags` to core dependencies, define clear `[project.optional-dependencies]` for open3d, add dependency smoke tests.
-- **Phase 2 (Stereo and ICP Correctness):** Replace fake ICP fallback with a genuine, CPU-only 2D SVD/ICP algorithm using NumPy/SciPy; audit camera mounting, projection, and visual odometry.
-- **Phase 3 (Figures and Traceability):** Fix percentage scaling in `generate_figure_realdata.py`, run actual moderate-degradation connected-vision experiment, remove hardcoded metric fallbacks.
-- **Phase 4 (Covariance and Consistency):** Correct process noise scaling during wheel slip and blackout; calibrate filter uncertainty models; report independent empirical coverage and NEES.
-- **Phase 5 (Sensor Fidelity and Provenance):** Clarify 5 Hz hybrid sampling cadence in README and reports; incorporate heading rotation in synthetic scene generation.
-- **Phase 6 (GNSS Recovery Robustness):** Harmonize buffer defaults ($M=3$); expand adversarial tests for consecutive multipath outliers and turning blackouts.
-- **Phase 7 (Particle Filter and AMCL):** Eliminate duplicate resampling in `AMCLAdaptiveParticleFilter2D`; benchmark fixed vs adaptive KLD filtering fairly.
-- **Phase 8 (Safety Supervisor and REP-105):** State open-loop replay limitations explicitly; implement true SE(2) composition for `map -> odom -> base_link`.
-- **Phase 9 (Test Architecture and Regression Coverage):** Add regression tests for F01 to F18; implement lightweight GitHub Actions CI configuration.
-- **Phase 10 (Documentation and Attribution):** Update README, add M2DGR-plus citation, synchronize all reports.
-- **Phase 11 (Full Reproduction):** Run complete clean reproduction and compile final audit deliverables.
+We proceed through the phases in strict dependency order:
+1. **Phase 1 (P0):** Fix false-recovery metric integrity in `gnss_recovery.py` and `realdata.py`.
+2. **Phase 2 (P1):** Adversarial GNSS recovery validation (persistent bias detection / explicit unobservability).
+3. **Phase 3 (P1):** Repair sequential Bayesian particle weight accumulation in `particle_filter.py`.
+4. **Phase 4 (P1):** Repair AMCL recovery likelihood and KLD sampling.
+5. **Phase 5 (P1/P2):** Fix full-pose NEES Mahalanobis computation in `metrics.py`.
+6. **Phase 6 (P1/P2):** Repair stereo reprojection matrix sign and mounting RPY transforms in `stereo.py`.
+7. **Phase 7 (P1):** Enforce ROS REP-105 composition invariant across all epochs.
+8. **Phase 8 (P1):** Enforce measured-standstill semantics in `fail_safe.py`.
+9. **Phase 9 (P1):** Reconcile visual-odometry coupling terminology and experimental claims.
+10. **Phase 10 (P1/P2):** Fix sensor cadence manifests and documentation.
+11. **Phases 11-17:** Re-benchmark, re-generate figures, expand regression tests, and perform red-team re-audit.
