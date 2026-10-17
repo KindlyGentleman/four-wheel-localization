@@ -307,17 +307,25 @@ class ParticleFilter2D:
 
             log_weights[i] = np.sum(np.log(p_beam))
 
+        # Absolute observation likelihood metric (geometric mean probability per beam).
+        # Bounded and numerical underflow-resistant; drops by orders of magnitude when kidnapped.
+        per_beam_likelihood = np.exp(log_weights / max(1, n_beams))
+        avg_likelihood = float(np.mean(per_beam_likelihood))
+
+        # Sequential Bayesian importance weight update:
+        # log w_k^(i) = log w_{k-1}^(i) + log p(z_k | x_k^(i))
+        prior_log_w = np.log(np.maximum(self.weights, 1e-300))
+        comb_log_weights = prior_log_w + log_weights
+
         # Log-sum-exp normalization
-        max_log = np.max(log_weights)
-        weights_unnorm = np.exp(log_weights - max_log)
+        max_log = np.max(comb_log_weights)
+        weights_unnorm = np.exp(comb_log_weights - max_log)
         total_w = np.sum(weights_unnorm)
 
         if total_w > 1e-12:
             self.weights = weights_unnorm / total_w
         else:
             self.weights = np.ones(self.N) / float(self.N)
-
-        avg_likelihood = float(np.mean(weights_unnorm))
 
         # Update estimates and calculate effective sample size
         self._compute_estimate()

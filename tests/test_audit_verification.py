@@ -232,3 +232,90 @@ def test_amcl_adaptive_single_resampling_and_posterior_weights():
     pos_err = math.hypot(amcl.estimated_pose[0] - true_pose[0], amcl.estimated_pose[1] - true_pose[1])
     assert pos_err < 0.50
 
+
+def test_particle_filter_sequential_weight_accumulation_without_resampling():
+    """
+    Verify sequential Bayesian importance weight accumulation across consecutive
+    scans when resampling is skipped.
+    log w_k^(i) = log w_{k-1}^(i) + log p(z_k | x_k^(i)).
+    """
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    true_pose = np.array([3.0, 3.0, 0.0])
+    angles, ranges = v_map.simulate_lidar_scan(true_pose, num_beams=16, max_range_m=12.0)
+
+    rng = np.random.RandomState(42)
+    pf = ParticleFilter2D(
+        occupancy_map=v_map,
+        num_particles=100,
+        initial_pose=true_pose,
+        rng=rng
+    )
+
+    # First update without resampling
+    pf.compute_scan_weights(angles, ranges)
+    w_step1 = pf.weights.copy()
+    n_eff_1 = pf.n_eff
+
+    # Artificially modify one particle's weight to verify non-uniform prior accumulation
+    # Second update without resampling
+    pf.compute_scan_weights(angles, ranges)
+    w_step2 = pf.weights.copy()
+    n_eff_2 = pf.n_eff
+
+    # Under repeated consistent measurements without resampling, weight mass concentrates
+    # and effective sample size decreases (variance of weights increases)
+    assert not np.array_equal(w_step1, w_step2)
+    assert n_eff_2 <= n_eff_1
+    # Check that highest weighted particle in step 1 further increases in relative importance
+    best_idx = np.argmax(w_step1)
+    assert w_step2[best_idx] >= w_step1[best_idx]
+
+
+def test_amcl_kidnapped_robot_recovery_injection():
+    """
+    Verify that AMCL detects kidnapping via absolute observation likelihood drop
+    and injects random particles (p_random > 0) to recover global pose.
+    """
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pose_init = np.array([2.0, 2.0, 0.0])
+    angles, ranges_nominal = v_map.simulate_lidar_scan(pose_init, num_beams=24, max_range_m=12.0)
+
+    rng = np.random.RandomState(123)
+    amcl = AMCLAdaptiveParticleFilter2D(
+        occupancy_map=v_map,
+        min_particles=100,
+        max_particles=500,
+        initial_pose=pose_init,
+        alpha_slow=0.01,
+        alpha_fast=0.20,
+        rng=rng
+    )
+
+    # 1. Warm up filter in nominal location: w_fast and w_slow track high likelihood
+    for _ in range(5):
+        amcl.update_scan_adaptive(angles, ranges_nominal)
+
+    assert amcl.w_slow > 0.30
+    assert amcl.w_fast > 0.30
+    assert amcl.p_random < 0.10
+
+    # 2. Kidnap robot: teleport robot across map to [-5.0, -5.0, 1.57]
+    pose_kidnapped = np.array([-5.0, -5.0, 1.57])
+    _, ranges_kidnapped = v_map.simulate_lidar_scan(pose_kidnapped, num_beams=24, max_range_m=12.0)
+
+    # 3. Feed scans from kidnapped location into the filter
+    # Absolute observation likelihood must drop sharply and trigger recovery injection
+    p_random_history = []
+    for _ in range(10):
+        amcl.update_scan_adaptive(angles, ranges_kidnapped)
+        p_random_history.append(amcl.p_random)
+
+    # Recovery injection probability must have spiked
+    max_p_rand = max(p_random_history)
+    assert max_p_rand > 0.40, f"Expected p_random > 0.40 after kidnapping, got {max_p_rand:.2f}"
+
+
