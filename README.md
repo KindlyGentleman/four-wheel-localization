@@ -16,7 +16,7 @@ I wanted to test this in a controlled, repeatable environment without running a 
 
 To keep the vehicle kinematics grounded in real motion, I used the 2D ground-truth trajectory from the outdoor M2DGR `Anomaly` dataset run (Clearpath Husky rover, Shanghai Jiao Tong University). I wrote synthetic sensor generators around that reference trajectory in pure Python:
 - Simulation suite: Four independent wheel encoders (50 Hz), chassis IMU (50 Hz), compass (10 Hz), and GNSS fixes (1 Hz)
-- Hybrid M2DGR-plus benchmark: Ground-truth trajectory cadence of ~5.0 Hz (233 poses over 46.2s) with ~5.0 Hz odometry, IMU, and downward camera flow, and ~2.5 Hz GNSS (every second epoch)
+- Hybrid M2DGR-plus benchmark: Ground-truth trajectory cadence of ~5.0 Hz (233 poses over 46.2s) with ~5.0 Hz odometry, IMU, and downward camera flow, and ~1.0 Hz GNSS (every 5th epoch, 1.004 Hz)
 - Procedural ground texture with OpenCV Lucas-Kanade feature tracking (tracking ground displacement)
 - Synthetic stereo camera and 2D landmark LiDAR models
 
@@ -51,9 +51,9 @@ The main experiment simulates a 20-second complete GNSS blackout ($t = 14.0$ s t
 
 - **(a) Downward Optical Flow:** Downward-looking camera tracking FAST keypoints across procedural ground texture with Lucas-Kanade optical flow. The measured pixel displacement provides direct body-frame linear velocity $(\Delta x, \Delta y)$ independent of wheel contact.
 - **(b) Planar Trajectory on M2DGR Track:** Ground truth trajectory from an outdoor Clearpath Husky rover (`Anomaly` track, black). Dead reckoning (violet) drifts off-course during the slip and blackout segment. The strict innovation gate (red) permanently locks out. The standard EKF (blue) recovers after a 2.85 s transient overshoot. The recoverable EKF (green) re-anchors smoothly, adhering to the ROS REP-105 standard (continuous `odom -> base_link` frame with a discrete `map -> odom` transform offset).
-- **(c) Multi-Sensor Availability Timeline:** Timeline showing hybrid sensor cadences: Wheel Odometry (~5 Hz), IMU (~5 Hz), Camera Optical Flow (~5 Hz), and GNSS fixes (~2.5 Hz). Highlights the 20-second GNSS outage window ($t = 14.0$ to $34.0$ s) and the overlapping wheel slip event ($t = 13.0$ to $18.0$ s).
+- **(c) Multi-Sensor Availability Timeline:** Timeline showing hybrid sensor cadences: Wheel Odometry (~5 Hz), IMU (~5 Hz), Camera Optical Flow (~5 Hz), and GNSS fixes (~1.0 Hz). Highlights the 20-second GNSS outage window ($t = 14.0$ to $34.0$ s) and the overlapping wheel slip event ($t = 13.0$ to $18.0$ s).
 - **(d) Position Error Over Time:** Quantitative time-series error $e(t)$. During the blackout, drift climbs to roughly 2.1 m. At $t = 34.0$ s, the strict filter rejects all incoming fixes ($0/27$ accepted), causing permanent divergence (red line). Recoverable strategies drop error back below 0.3 m within 0.86 to 1.86 s.
-- **(e) Causal Vision Ablation:** Rigorous four-mode test proving causal impact. Mode A (Vision Off: 1.094 m) and Mode B (Vision Disconnected: 1.094 m) are identical, proving zero side-effects. Mode C (Vision Connected: 0.837 m) delivers an authentic 23.5% error reduction during slip. Mode D (Vision Degraded: 1.094 m) demonstrates that the innovation gate safely rejects corrupt visual velocities.
+- **(e) Causal Vision Ablation:** Rigorous four-mode test proving causal impact. Mode A (Vision Off: 1.094 m) and Mode B (Vision Disconnected: 1.094 m) are identical, proving zero side-effects. Mode C (Vision Connected: 0.837 m) delivers an authentic 23.5% error reduction during slip via optical-flow wheel dampening. Mode D (Vision Degraded: 1.094 m) demonstrates that tracking failure and inlier suppression safely deactivate optical-flow compensation without corrupting the baseline.
 - **(f) Recovery Strategy Trade-off:** Scatter plot mapping Position RMSE against Post-Outage GNSS Acceptance percentage across all 8 baselines (R0 to R7). Shows that strict gating (R3) scores 0% acceptance and 1.36 m RMSE, whereas temporal consistency (R4) and covariance inflation (R6) achieve 96.3% to 100% acceptance with optimal 1.06 m to 1.09 m RMSE.
 
 ### How Different Recovery Strategies Behave
@@ -88,7 +88,7 @@ A common claim in sensor fusion papers is that adding a camera improves robustne
 2. **Mode B (Vision Disconnected):** Feature tracker running and extracting KLT tracks, but velocity outputs explicitly withheld from the EKF. Position RMSE: **1.0939 m**.
    - Mode A and Mode B produce identical results to 16 decimal places. This confirms there were no hidden side-effects or leaky globals.
 3. **Mode C (Vision Connected, Clean Texture):** Visual velocity estimates fused directly into the EKF. Position RMSE drops from 1.0939 m to **0.8370 m** (a 23.5% error reduction). The visual displacement dampens the odometry wheel-spin error during the slip window.
-4. **Mode D (Vision Connected, Severe Degradation):** Gaussian noise and blur added to camera frames. Valid feature inliers drop from 286 to 59. The innovation gate identifies the noisy visual velocities and safely rejects them, falling back to the 1.0939 m baseline without diverging.
+4. **Mode D (Vision Connected, Severe Degradation):** Gaussian noise and blur added to camera frames. Valid feature inliers drop from 286 to 59. Optical tracking drops below usable feature thresholds, safely bypassing wheel-speed dampening and falling back to the 1.0939 m baseline without diverging.
 
 ---
 
@@ -137,7 +137,7 @@ pip install -e .
 Run tests and experiments:
 
 ```bash
-# 1. Run all 83 unit and regression tests (~35s)
+# 1. Run all 91 unit and regression tests (~45s)
 python -m pytest tests/
 
 # 2. Run the hybrid benchmark and causal vision ablation (~12s)

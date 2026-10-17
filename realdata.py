@@ -879,7 +879,11 @@ def run_hybrid_experiment(
         )
         prev_v_wheel = v_wheel
 
-        # Optional causal visual coupling (only when vision_mode == "connected")
+        # Optical-flow-assisted wheel-speed dampening / heuristic slip compensation
+        # (Active only when vision_mode == "connected").
+        # Methodological distinction: This mechanism functions as an empirical velocity
+        # dampener on wheel-encoder odometry inputs, rather than a formal Kalman measurement
+        # update with an innovation gate.
         v_eff = v_wheel
         if vision_mode == "connected" and v_res is not None and not v_res["tracking_failed"]:
             vo_speed = float(v_res["flow_speed_m_s"])
@@ -915,7 +919,7 @@ def run_hybrid_experiment(
         else:
             est.pose = integrate_pose_rk2(est.pose, v_eff, w_wheel, dt)
 
-        # Step 3: GNSS observation (1 Hz, every 5 samples)
+        # Step 3: GNSS observation (~1.00 Hz cadence, sampled every 5 samples from 5.02 Hz native dataset)
         gnss_fix_val = None
         if i % 5 == 0 and not isinstance(est, DeadReckoning4WD):
             total_gnss_epochs += 1
