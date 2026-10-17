@@ -230,3 +230,60 @@ def test_zero_ground_truth_leakage_in_slip_estimator():
     )
     assert score_slip > 0.08
     assert score_slip > score_nominal * 5.0
+
+
+def test_supervisor_requires_measured_standstill_before_standstill_hold():
+    """
+    Verify that the safe-stop supervisor remains in BRAKING state when commanded
+    velocity reaches zero if physical sensor measurements indicate the vehicle is
+    still moving (v_measured > standstill_vel_thresh).
+    """
+    cfg = SafeStopConfig(max_outage_time_s=1.0, max_deceleration_m_s2=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+
+    # 1. Trigger outage and enter BRAKING
+    supervisor.update(
+        t=0.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=0.5, omega_measured=0.0,
+        pos_cov_diag=np.array([0.01, 0.01]),
+        new_gnss_fix=np.array([0.0, 0.0])
+    )
+
+    # Advance time without GNSS -> enters BRAKING at t=1.2s
+    status = supervisor.update(
+        t=1.2, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=0.3, omega_measured=0.0,
+        pos_cov_diag=np.array([0.1, 0.1]),
+        new_gnss_fix=None
+    )
+    assert status.state == SafeStopState.BRAKING
+
+    # 2. Simulate commanded deceleration reaching 0.0, but vehicle continues sliding
+    for step in range(10):
+        t = 1.3 + step * 0.1
+        status = supervisor.update(
+            t=t, dt=0.1, v_desired=0.5, omega_desired=0.0,
+            v_measured=0.25, # Vehicle still sliding at 0.25 m/s!
+            omega_measured=0.0,
+            pos_cov_diag=np.array([0.2, 0.2]),
+            new_gnss_fix=None
+        )
+
+    # Commanded speed is zero, but vehicle has not stopped moving
+    assert status.commanded_v == 0.0
+    assert status.state == SafeStopState.BRAKING, (
+        f"Supervisor must stay in BRAKING while v_measured > threshold, got {status.state}"
+    )
+    assert status.is_stopped is False
+
+    # 3. Vehicle physically comes to a stop: v_measured drops below threshold
+    status_stopped = supervisor.update(
+        t=2.5, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=0.005, # Measured velocity below 0.015 m/s
+        omega_measured=0.0,
+        pos_cov_diag=np.array([0.3, 0.3]),
+        new_gnss_fix=None
+    )
+    assert status_stopped.state == SafeStopState.STANDSTILL_HOLD
+    assert status_stopped.is_stopped is True
+

@@ -147,11 +147,12 @@ class SafeStopSupervisor:
                 self.current_omega = min(0.0, self.current_omega + dec_w)
 
             # Check for confirmed standstill
+            # Check for confirmed physical standstill from sensor measurements
             at_standstill = (
                 abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
                 and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
             )
-            if at_standstill or abs(self.current_v) < 1e-3:
+            if at_standstill:
                 self.state = SafeStopState.STANDSTILL_HOLD
                 self.current_v = 0.0
                 self.current_omega = 0.0
