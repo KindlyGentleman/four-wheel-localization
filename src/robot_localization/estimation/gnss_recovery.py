@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 
-from robot_localization.models.kinematics import wrap_angle
+from robot_localization.models.kinematics import wrap_angle, compute_map_to_odom_se2, integrate_pose_rk2
 from robot_localization.estimation.robust_ekf import RobustEKF4D
 
 
@@ -48,6 +48,20 @@ class BufferedGNSSFix:
     nis_against_prior: float
     integrated_dr_distance: float
     dr_position: Optional[np.ndarray] = None
+
+
+@dataclass
+class RecoveryEvent:
+    """Telemetry recorded whenever a GNSS recovery update is executed online."""
+    timestamp: float
+    strategy: str
+    reason: str
+    pre_pos: np.ndarray          # 2D estimated position before recovery update
+    post_pos: np.ndarray         # 2D estimated position after recovery update
+    accepted_fix: np.ndarray     # 2D measurement that triggered recovery
+    measurement_cov: np.ndarray  # 2x2 measurement covariance
+    prior_cov_diag: np.ndarray   # prior position covariance diagonal
+    nis: float                   # innovation squared against prior
 
 
 class RecoverableRobustEKF4D(RobustEKF4D):
@@ -108,11 +122,11 @@ class RecoverableRobustEKF4D(RobustEKF4D):
         # map_to_odom: global correction transform (absorbs relocalization jumps)
         # map_pose: x[:3] (global pose in map frame)
         self.odom_pose: np.ndarray = self.x[:3].copy()
-        self.map_to_odom: np.ndarray = np.zeros(3, dtype=np.float64)
+        self.map_to_odom: np.ndarray = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
         self.relocalization_events: List[Dict[str, Any]] = []
 
         # Telemetry
-        self.recovery_events: List[Dict[str, Any]] = []
+        self.recovery_events: List[RecoveryEvent] = []
         self.health_history: List[Tuple[float, EstimatorHealthState]] = []
         self.false_recoveries = 0
         self.successful_recoveries = 0
@@ -135,8 +149,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
         self.distance_since_gnss += ds
 
         # Continuous odom-frame integration (REP-105: odom -> base_link never jumps)
-        from robot_localization.models.kinematics import integrate_pose_rk2
-        self.odom_pose = integrate_pose_rk2(self.odom_pose, v_enc, omega_enc, dt)
+        omega_eff = float(gyro_z - self.x[3])
+        self.odom_pose = integrate_pose_rk2(self.odom_pose, v_enc, omega_eff, dt)
 
         # Strategy R3: Physically justified distance-and-time-scaled process noise
         orig_q_pos = self.q_pos_add
@@ -217,6 +231,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
             nis_adj = float(y.T @ np.linalg.inv(S_adj) @ y)
             self.last_nis_gnss = nis_adj
             if nis_adj <= self.gnss_gate:
+                pre_pos = self.x[:2].copy()
+                prior_cov_diag = self.P[0:2, 0:2].diagonal().copy()
                 if self.time_since_gnss > 1.5:
                     self.P[0:2, 0:2] += (sigma_drift ** 2) * np.eye(2)
                     self.P[0:2, 2:] = 0.0
@@ -225,6 +241,18 @@ class RecoverableRobustEKF4D(RobustEKF4D):
                     S_pos = H_pos @ self.P @ H_pos.T + R_gnss
                     self._apply_standard_update(y, H_pos, np.linalg.inv(S_pos), R_gnss)
                     self.successful_recoveries += 1
+                    post_pos = self.x[:2].copy()
+                    self.recovery_events.append(RecoveryEvent(
+                        timestamp=t,
+                        strategy="R3",
+                        reason="R3 covariance adjusted",
+                        pre_pos=pre_pos,
+                        post_pos=post_pos,
+                        accepted_fix=z_gnss.copy(),
+                        measurement_cov=R_gnss.copy(),
+                        prior_cov_diag=prior_cov_diag,
+                        nis=nis_adj
+                    ))
                 else:
                     self._apply_standard_update(y, H, S_inv, R_gnss)
                 self.time_since_gnss = 0.0
@@ -271,14 +299,27 @@ class RecoverableRobustEKF4D(RobustEKF4D):
             if consistent:
                 # Valid returning GNSS confirmed by temporal consistency!
                 # Apply recovery update with temporarily expanded Kalman gain
+                pre_pos = self.x[:2].copy()
+                prior_cov_diag = self.P[0:2, 0:2].diagonal().copy()
                 self._apply_recovery_update(z_gnss, R_gnss)
+                post_pos = self.x[:2].copy()
                 self.time_since_gnss = 0.0
                 self.distance_since_gnss = 0.0
                 self.accepted_gnss_count += 1
                 self.successful_recoveries += 1
                 self.gnss_buffer.clear()
                 self.state_machine = EstimatorHealthState.TRACKING_RECOVERED
-                self.recovery_events.append({"time": t, "strategy": "R1", "reason": reason})
+                self.recovery_events.append(RecoveryEvent(
+                    timestamp=t,
+                    strategy="R1",
+                    reason=reason,
+                    pre_pos=pre_pos,
+                    post_pos=post_pos,
+                    accepted_fix=z_gnss.copy(),
+                    measurement_cov=R_gnss.copy(),
+                    prior_cov_diag=prior_cov_diag,
+                    nis=float(nis)
+                ))
                 return True, f"Accepted via Recovery ({reason})"
             else:
                 self.rejected_gnss_count += 1
@@ -308,14 +349,27 @@ class RecoverableRobustEKF4D(RobustEKF4D):
                 consistent, reason = self._check_buffer_consistency()
                 if consistent:
                     self.state_machine = EstimatorHealthState.RELOCALIZING
+                    pre_pos = self.x[:2].copy()
+                    prior_cov_diag = self.P[0:2, 0:2].diagonal().copy()
                     self._apply_recovery_update(z_gnss, R_gnss, infl_factor=0.60)
+                    post_pos = self.x[:2].copy()
                     self.state_machine = EstimatorHealthState.TRACKING_RECOVERED
                     self.time_since_gnss = 0.0
                     self.distance_since_gnss = 0.0
                     self.accepted_gnss_count += 1
                     self.successful_recoveries += 1
                     self.gnss_buffer.clear()
-                    self.recovery_events.append({"time": t, "strategy": "R2", "reason": reason})
+                    self.recovery_events.append(RecoveryEvent(
+                        timestamp=t,
+                        strategy="R2",
+                        reason=reason,
+                        pre_pos=pre_pos,
+                        post_pos=post_pos,
+                        accepted_fix=z_gnss.copy(),
+                        measurement_cov=R_gnss.copy(),
+                        prior_cov_diag=prior_cov_diag,
+                        nis=float(nis)
+                    ))
                     return True, "Recovered via Hysteresis (RELOCALIZING -> TRACKING_RECOVERED)"
                 else:
                     self.rejected_gnss_count += 1
@@ -332,14 +386,14 @@ class RecoverableRobustEKF4D(RobustEKF4D):
             if consistent:
                 # Re-anchor global position while keeping heading and gyro bias intact
                 pre_pos = self.x[:2].copy()
+                prior_cov_diag = self.P[0:2, 0:2].diagonal().copy()
                 self.x[0] = float(z_gnss[0] - (lx * c - ly * s))
                 self.x[1] = float(z_gnss[1] - (lx * s + ly * c))
                 post_pos = self.x[:2].copy()
                 jump = post_pos - pre_pos
                 jump_dist = float(np.linalg.norm(jump))
+                self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
                 if jump_dist > 0.05:
-                    from robot_localization.models.kinematics import compute_map_to_odom_se2
-                    self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
                     self.relocalization_events.append({
                         "time": t,
                         "pre_pos": pre_pos.copy(),
@@ -358,7 +412,17 @@ class RecoverableRobustEKF4D(RobustEKF4D):
                 self.successful_recoveries += 1
                 self.gnss_buffer.clear()
                 self.state_machine = EstimatorHealthState.TRACKING_RECOVERED
-                self.recovery_events.append({"time": t, "strategy": "R4", "reason": "Global re-anchored"})
+                self.recovery_events.append(RecoveryEvent(
+                    timestamp=t,
+                    strategy="R4",
+                    reason="Global re-anchored",
+                    pre_pos=pre_pos,
+                    post_pos=post_pos,
+                    accepted_fix=z_gnss.copy(),
+                    measurement_cov=R_gnss.copy(),
+                    prior_cov_diag=prior_cov_diag,
+                    nis=float(nis)
+                ))
                 return True, "Accepted via Controlled Reinitialization (R4)"
             else:
                 self.rejected_gnss_count += 1
@@ -406,6 +470,19 @@ class RecoverableRobustEKF4D(RobustEKF4D):
             if discrepancy > thresh:
                 return False, f"Displacement discrepancy {discrepancy:.2f} m > threshold {thresh:.2f} m"
 
+        # 3. Plausible blackout drift envelope check against prior state
+        # Detects gross persistent offsets that exceed maximum kinematic drift reachability
+        if self.distance_since_gnss > 0.5:
+            last_fix = self.gnss_buffer[-1]
+            disp_from_prior = float(np.linalg.norm(last_fix.position_enu - self.x[:2]))
+            max_drift_reach = max(
+                self.relative_disp_tol * 3.0,
+                2.5 * (self.distance_drift_fraction * self.distance_since_gnss + self.outage_drift_rate * self.time_since_gnss)
+                + 3.0 * float(np.sqrt(np.trace(self.P[:2, :2])))
+            )
+            if disp_from_prior > max_drift_reach:
+                return False, f"Gross offset {disp_from_prior:.2f} m exceeds plausible blackout drift envelope {max_drift_reach:.2f} m"
+
         return True, f"Consistent across {len(self.gnss_buffer)} fixes (speed {apparent_speed:.2f} m/s)"
 
     def _apply_standard_update(self, y: np.ndarray, H: np.ndarray, S_inv: np.ndarray, R: np.ndarray):
@@ -416,6 +493,7 @@ class RecoverableRobustEKF4D(RobustEKF4D):
         I_KH = np.eye(4) - K @ H
         self.P = I_KH @ self.P @ I_KH.T + K @ R @ K.T
         self.P = 0.5 * (self.P + self.P.T)
+        self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
 
     def _apply_recovery_update(self, z_gnss: np.ndarray, R_gnss: np.ndarray, infl_factor: float = 0.85):
         """
@@ -455,9 +533,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
 
         jump = post_pos - pre_pos
         jump_dist = float(np.linalg.norm(jump))
+        self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
         if jump_dist > 0.05:
-            from robot_localization.models.kinematics import compute_map_to_odom_se2
-            self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
             self.relocalization_events.append({
                 "pre_pos": pre_pos.copy(),
                 "post_pos": post_pos.copy(),
@@ -468,3 +545,32 @@ class RecoverableRobustEKF4D(RobustEKF4D):
         I_KH = np.eye(4) - K @ H
         self.P = I_KH @ P_temp @ I_KH.T + K @ R_gnss @ K.T
         self.P = 0.5 * (self.P + self.P.T)
+
+    def evaluate_recovery_integrity(
+        self,
+        gt_timestamps: np.ndarray,
+        gt_positions: np.ndarray,
+        error_threshold_m: float = 1.0
+    ) -> Tuple[int, int]:
+        """
+        Offline scientific verification of recovery events against ground truth.
+        Quantifies true recoveries versus false recoveries.
+        """
+        if len(self.recovery_events) == 0:
+            return 0, 0
+
+        true_rec = 0
+        false_rec = 0
+        for ev in self.recovery_events:
+            gt_x = float(np.interp(ev.timestamp, gt_timestamps, gt_positions[:, 0]))
+            gt_y = float(np.interp(ev.timestamp, gt_timestamps, gt_positions[:, 1]))
+            gt_pt = np.array([gt_x, gt_y])
+            post_err = float(np.linalg.norm(ev.post_pos - gt_pt))
+            if post_err <= error_threshold_m:
+                true_rec += 1
+            else:
+                false_rec += 1
+
+        self.successful_recoveries = true_rec
+        self.false_recoveries = false_rec
+        return true_rec, false_rec

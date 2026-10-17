@@ -51,6 +51,7 @@ from robot_localization.estimation.gnss_recovery import (
     RecoveryStrategy,
     EstimatorHealthState,
 )
+from robot_localization.evaluation.metrics import evaluate_recovery_events
 
 
 @dataclass
@@ -1030,7 +1031,18 @@ def run_hybrid_experiment(
 
     false_recoveries = 0
     if isinstance(est, RecoverableRobustEKF4D):
-        false_recoveries = est.false_recoveries
+        if est.recovery_events:
+            rec_eval = evaluate_recovery_events(
+                recovery_events=est.recovery_events,
+                gt_timestamps=timestamps,
+                gt_positions=gt.poses_2d[:, :2],
+                error_threshold_m=1.0
+            )
+            false_recoveries = rec_eval["false_recoveries"] if rec_eval["false_recoveries"] is not None else 0
+            est.false_recoveries = false_recoveries
+            est.successful_recoveries = rec_eval["true_recoveries"] if rec_eval["true_recoveries"] is not None else 0
+        else:
+            false_recoveries = 0
 
     return RealDataTrialResult(
         method_name=f"{estimator_type}_{recovery_strategy.value if isinstance(est, RecoverableRobustEKF4D) else 'none'}",

@@ -16,8 +16,11 @@ import numpy as np
 from robot_localization.estimation.gnss_recovery import (
     RecoverableRobustEKF4D,
     RecoveryStrategy,
-    EstimatorHealthState
+    EstimatorHealthState,
+    RecoveryEvent
 )
+from robot_localization.models.kinematics import se2_compose
+from robot_localization.evaluation.metrics import evaluate_recovery_events
 
 
 def simulate_outage_and_return(strategy: RecoveryStrategy, num_outage_seconds: float = 20.0):
@@ -305,4 +308,173 @@ def test_rep105_odometry_continuity_during_r4_jump():
     assert abs(filter_inst.odom_pose[0] - 11.0) < 0.20
     assert abs(filter_inst.x[0] - 14.0) < 0.50
     assert abs(filter_inst.map_to_odom[0]) > 2.0
+
+
+def test_persistent_bias_attack_integrity_detection():
+    """
+    Adversarial validation:
+    A persistent translation offset attack (z_k = p_k + b) has delta_z == delta_p.
+    When the offset is within the slip drift envelope, dead reckoning cannot
+    distinguish it from wheel slip. R1 will accept the recovery.
+    Verify that evaluate_recovery_integrity and evaluate_recovery_events catch
+    the false recovery against ground truth and increment false_recoveries.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.04, 0.04])
+
+    true_pos_log = []
+    time_log = []
+    true_x = 0.0
+
+    # 20 seconds outage under 10% slip
+    for step in range(int(20.0 / dt)):
+        t = step * dt
+        true_x += 0.90 * dt
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+        )
+        time_log.append(t)
+        true_pos_log.append([true_x, 0.0])
+
+    # Injected returning fixes have a persistent +2.5m offset (within slip envelope)
+    # Filter estimated position is ~20.0 m, true position is ~18.0 m.
+    # Spoofed fix claims 20.5 m (b = +2.5 m relative to ground truth)
+    bias = 2.5
+    for k in range(3):
+        for _ in range(int(1.0 / dt)):
+            true_x += 0.90 * dt
+            filter_inst.predict_recoverable(
+                v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+                Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+            )
+            t_curr = 20.0 + (k * 1.0) + (_ + 1) * dt
+            time_log.append(t_curr)
+            true_pos_log.append([true_x, 0.0])
+
+        t_fix = 20.0 + (k + 1) * 1.0
+        z_spoofed = np.array([true_x + bias, 0.0])
+        acc, _ = filter_inst.update_gnss_recoverable(t_fix, z_spoofed, R_gnss)
+        if k == 1:
+            assert acc, "Second spoofed fix should pass relative delta check"
+
+    # Evaluate integrity against ground truth
+    gt_times = np.array(time_log)
+    gt_positions = np.array(true_pos_log)
+
+    true_rec, false_rec = filter_inst.evaluate_recovery_integrity(
+        gt_times, gt_positions, error_threshold_m=1.0
+    )
+    assert false_rec >= 1, f"Expected at least 1 false recovery, got {false_rec}"
+    assert true_rec == 0, f"Expected 0 true recoveries, got {true_rec}"
+
+    # Also verify the standalone evaluation function from metrics.py
+    eval_res = evaluate_recovery_events(
+        filter_inst.recovery_events, gt_times, gt_positions, error_threshold_m=1.0
+    )
+    assert eval_res["false_recoveries"] >= 1
+    assert eval_res["true_recoveries"] == 0
+    assert eval_res["status"] == "verified"
+
+
+def test_gross_persistent_offset_envelope_rejection():
+    """
+    Adversarial validation:
+    A gross spoofed offset (+30 meters) has delta_z == delta_p, but exceeds
+    the plausible kinematic blackout drift envelope.
+    The filter must reject and quarantine it in the consistency buffer.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.04, 0.04])
+
+    true_x = 0.0
+    for _ in range(int(15.0 / dt)):
+        true_x += 0.90 * dt
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+        )
+
+    # Injected fixes: +30 meters gross offset
+    gross_bias = 30.0
+    for k in range(3):
+        for _ in range(int(1.0 / dt)):
+            true_x += 0.90 * dt
+            filter_inst.predict_recoverable(
+                v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+                Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+            )
+        t_fix = 15.0 + (k + 1) * 1.0
+        z_gross = np.array([true_x + gross_bias, 0.0])
+        acc, reason = filter_inst.update_gnss_recoverable(t_fix, z_gross, R_gnss)
+        assert not acc, "Gross offset must be rejected by plausible drift envelope"
+        if k >= 1:
+            assert "exceeds plausible blackout drift envelope" in reason
+
+
+def test_rep105_continuous_composition_at_all_epochs():
+    """
+    Verify ROS REP-105 composition invariant across all epochs:
+      T_map_base == se2_compose(map_to_odom, odom_base)
+    This must hold during nominal tracking, prediction, and recovery updates.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.array([1.0, 2.0, 0.5, 0.0]),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+    dt = 0.05
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.04, 0.04])
+
+    def check_rep105_invariant():
+        composed = se2_compose(filter_inst.map_to_odom, filter_inst.odom_pose)
+        diff_pos = np.linalg.norm(composed[:2] - filter_inst.x[:2])
+        diff_th = abs(composed[2] - filter_inst.x[2])
+        assert diff_pos < 1e-5, f"Position mismatch {diff_pos} m in REP-105 composition"
+        assert diff_th < 1e-5, f"Heading mismatch {diff_th} rad in REP-105 composition"
+
+    # Initial check
+    check_rep105_invariant()
+
+    # Predictions
+    for step in range(20):
+        filter_inst.predict_recoverable(
+            v_enc=0.8, omega_enc=0.05, gyro_z=0.05,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.02
+        )
+        check_rep105_invariant()
+
+    # Nominal GNSS update
+    t = 1.0
+    z_nom = filter_inst.x[:2].copy() + np.array([0.01, -0.01])
+    acc, _ = filter_inst.update_gnss_recoverable(t, z_nom, R_gnss)
+    assert acc
+    check_rep105_invariant()
+
+    # Multiple predictions and updates
+    for step in range(30):
+        t += dt
+        filter_inst.predict_recoverable(
+            v_enc=0.8, omega_enc=-0.05, gyro_z=-0.05,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.02
+        )
+        check_rep105_invariant()
+        if step % 10 == 0:
+            z_step = filter_inst.x[:2].copy() + np.array([0.005, 0.005])
+            filter_inst.update_gnss_recoverable(t, z_step, R_gnss)
+            check_rep105_invariant()
+
 

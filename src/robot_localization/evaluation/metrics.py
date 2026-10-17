@@ -12,7 +12,7 @@ Statistical state estimation metrics:
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
@@ -82,7 +82,21 @@ def compute_nees_series(
         var_y = np.maximum(cov_diags[:, 1], 1e-12)
         nees_pos = (dx ** 2 / var_x) + (dy ** 2 / var_y)
 
-    nees_pose = nees_pos + (dtheta ** 2 / var_th)
+    if cov_mats is not None and cov_mats.ndim == 3 and cov_mats.shape[1] >= 3 and cov_mats.shape[2] >= 3:
+        nees_pose = np.zeros(len(dx))
+        for i in range(len(dx)):
+            P_3 = cov_mats[i, :3, :3]
+            e_3 = np.array([dx[i], dy[i], dtheta[i]], dtype=np.float64)
+            try:
+                v = np.linalg.solve(P_3, e_3)
+                nees_pose[i] = float(e_3 @ v)
+            except np.linalg.LinAlgError:
+                var_x = max(float(cov_diags[i, 0]), 1e-12)
+                var_y = max(float(cov_diags[i, 1]), 1e-12)
+                var_t = max(float(cov_diags[i, 2]), 1e-12)
+                nees_pose[i] = (dx[i] ** 2 / var_x) + (dy[i] ** 2 / var_y) + (dtheta[i] ** 2 / var_t)
+    else:
+        nees_pose = nees_pos + (dtheta ** 2 / var_th)
     return nees_pos, nees_pose
 
 
@@ -234,3 +248,93 @@ def compute_interval_metrics(
 
 def wrap_angle_array(angles: np.ndarray) -> np.ndarray:
     return np.arctan2(np.sin(angles), np.cos(angles))
+
+
+def evaluate_recovery_events(
+    recovery_events: List[Any],
+    gt_timestamps: Optional[np.ndarray],
+    gt_positions: Optional[np.ndarray],
+    error_threshold_m: float = 1.0
+) -> Dict[str, Any]:
+    """
+    Offline scientific evaluation of online recovery events against ground truth.
+    Separates online estimator execution (zero ground truth access) from
+    scientific verification metrics.
+
+    Args:
+        recovery_events: List of RecoveryEvent objects recorded by the estimator.
+        gt_timestamps: 1D array of ground truth timestamps.
+        gt_positions: (N, 2) array of ground truth 2D coordinates [x, y].
+        error_threshold_m: Maximum post-recovery error to classify as a true recovery.
+
+    Returns:
+        Dictionary containing:
+        - total_recoveries: int
+        - true_recoveries: Optional[int]
+        - false_recoveries: Optional[int]
+        - status: str ("verified", "no_recoveries", or "unobservable_without_ground_truth")
+        - event_details: List of per-event evaluation dicts.
+    """
+    if len(recovery_events) == 0:
+        return {
+            "total_recoveries": 0,
+            "true_recoveries": 0,
+            "false_recoveries": 0,
+            "status": "no_recoveries",
+            "event_details": []
+        }
+
+    if gt_timestamps is None or gt_positions is None or len(gt_timestamps) == 0 or len(gt_positions) == 0:
+        return {
+            "total_recoveries": len(recovery_events),
+            "true_recoveries": None,
+            "false_recoveries": None,
+            "status": "unobservable_without_ground_truth",
+            "event_details": []
+        }
+
+    true_rec = 0
+    false_rec = 0
+    details = []
+
+    for ev in recovery_events:
+        t_ev = getattr(ev, "timestamp", None)
+        if t_ev is None and isinstance(ev, dict):
+            t_ev = ev.get("time", ev.get("timestamp"))
+
+        post_pos = getattr(ev, "post_pos", None)
+        if post_pos is None and isinstance(ev, dict):
+            post_pos = ev.get("post_pos")
+
+        if t_ev is None or post_pos is None:
+            continue
+
+        gt_x = float(np.interp(t_ev, gt_timestamps, gt_positions[:, 0]))
+        gt_y = float(np.interp(t_ev, gt_timestamps, gt_positions[:, 1]))
+        gt_pt = np.array([gt_x, gt_y])
+
+        post_err = float(np.linalg.norm(np.asarray(post_pos)[:2] - gt_pt))
+        is_true = (post_err <= error_threshold_m)
+
+        if is_true:
+            true_rec += 1
+        else:
+            false_rec += 1
+
+        details.append({
+            "timestamp": t_ev,
+            "strategy": getattr(ev, "strategy", ev.get("strategy") if isinstance(ev, dict) else "unknown"),
+            "post_pos": np.asarray(post_pos)[:2].tolist(),
+            "gt_pos": gt_pt.tolist(),
+            "post_error_m": post_err,
+            "is_true_recovery": is_true
+        })
+
+    return {
+        "total_recoveries": len(recovery_events),
+        "true_recoveries": true_rec,
+        "false_recoveries": false_rec,
+        "status": "verified",
+        "event_details": details
+    }
+
