@@ -1,0 +1,48 @@
+benchmark_suite,experiment_id,metric_name,pre_audit_value,post_audit_value,delta,audit_verdict,root_cause_explanation
+Realdata_Hybrid,R0_dead_reckoning,pos_rmse_m,3.9257,1.3914,-2.5343,PASS,Corrected reverse kinematic integration sign in four-wheel dead reckoning
+Realdata_Hybrid,R0_dead_reckoning,peak_error_m,4.2217,2.1810,-2.0407,PASS,Fixed reverse kinematic integration eliminating false drift accumulation
+Realdata_Hybrid,R1_standard_ekf,pos_rmse_m,1.7542,1.0232,-0.7310,PASS,Fixed state recording timing and GNSS observation handling
+Realdata_Hybrid,R1_standard_ekf,recovery_time_s,0.0000,2.8527,+2.8527,PASS,Previously reported false recovery time due to uninitialized recovery timestamp
+Realdata_Hybrid,R2_bias_aware_ekf,pos_rmse_m,1.7112,1.0622,-0.6490,PASS,Corrected kinematics integration; gyro bias estimation tracks turn rate accurately
+Realdata_Hybrid,R2_bias_aware_ekf,heading_rmse_deg,72.9574,18.5060,-54.4514,PASS,Gyro bias state was initialized with unscaled prior; corrected settling dynamic
+Realdata_Hybrid,R3_strict_gated_ekf,pos_rmse_m,3.7185,1.3616,-2.3569,PASS,Fixed reverse kinematic sign; authentic gate lockout prevents post-outage GNSS fusion
+Realdata_Hybrid,R3_strict_gated_ekf,gnss_acceptance_pct,6.38,55.56,+49.18,PASS,Corrected denominator from total timesteps to available GNSS epochs (55.6% pre-outage; 0% post-outage)
+Realdata_Hybrid,R3_strict_gated_ekf,recovery_success,False,False,0.00,PASS,Confirmed permanent gate lockout under Chi-square threshold (9.21) after 20s drift
+Realdata_Hybrid,R4_recoverable_temporal,pos_rmse_m,1.8082,1.0939,-0.7143,PASS,Fixed reverse kinematics; temporal consistency window re-anchors filter at t=35.9s
+Realdata_Hybrid,R4_recoverable_temporal,recovery_time_s,1.8568,1.8568,0.0000,PASS,Verified: recovers within M=3 consecutive valid fixes (1.86s post-outage)
+Realdata_Hybrid,R5_recoverable_hysteresis,pos_rmse_m,2.1366,1.0939,-1.0427,PASS,Fixed hysteresis state threshold and settling window bug
+Realdata_Hybrid,R6_recoverable_cov_adj,pos_rmse_m,3.7185,1.0562,-2.6623,PASS,Previously failed to apply covariance inflation during outage; fixed P growth
+Realdata_Hybrid,R6_recoverable_cov_adj,recovery_time_s,0.0000,0.8595,+0.8595,PASS,Covariance adjustment immediately accepts first post-outage fix (0.86s)
+Realdata_Hybrid,R7_recoverable_reinit,pos_rmse_m,15.3253,1.0940,-14.2313,PASS,CRITICAL: Previously diverged due to rank-deficient covariance reset; fixed P re-anchoring
+Realdata_Hybrid,R4_vision_disabled_A,pos_rmse_m,N/A,1.0939,N/A,PASS,Mode A: Vision disabled entirely; verified baseline for causal ablation
+Realdata_Hybrid,R4_vision_disconnected_B,pos_rmse_m,1.8082,1.0939,-0.7143,PASS,Mode B: Vision computed but disconnected; exactly equals Mode A (1.0939m) proving zero side-effects
+Realdata_Hybrid,R4_vision_connected_clean_C,pos_rmse_m,N/A,0.8370,N/A,PASS,Mode C: Vision connected with clean features; reduces wheel-slip drift from 1.094m to 0.837m
+Realdata_Hybrid,R4_vision_connected_severe_D,pos_rmse_m,1.7870,1.0939,-0.6931,PASS,Mode D: Severe visual degradation; outlier rejection rejects tracking and falls back safely to Mode B
+Ablation_Suite,Config_A_encoders_only,pos_rmse_m,0.0441,0.0441,0.0000,PASS,Perfect simulation encoders with zero slip show low error under nominal traction
+Ablation_Suite,Config_B_encoders_imu,pos_rmse_m,3.4091,3.4091,0.0000,PASS,Uncompensated gyro bias (0.025 rad/s) causes quadratic lateral position drift
+Ablation_Suite,Config_C_encoders_imu_gnss,pos_rmse_m,0.2504,0.2499,-0.0005,PASS,GNSS position updates bound lateral drift effectively
+Ablation_Suite,Config_D_all_sensors,pos_rmse_m,0.0858,0.0859,+0.0001,PASS,Full 4-sensor fusion provides optimal state estimation under nominal traction
+Ablation_Suite,Config_E_encoders_imu_stereo,pos_rmse_m,3.3868,3.3868,0.0000,PASS,Stereo VO without absolute position fixes drifts over time
+Ablation_Suite,Config_F_stereo_gnss,pos_rmse_m,0.2531,0.2526,-0.0005,PASS,Stereo VO + GNSS maintains bounded drift under nominal traction
+Ablation_Suite,Config_I_no_wheels_severe_slip,pos_rmse_m,7.5544,7.5544,0.0000,PASS,Confirmed severe drift when wheel encoders are unavailable and slip is active
+Ablation_Suite,Config_J0_strict_lockout,pos_rmse_m,3.1505,3.1566,+0.0061,PASS,Confirmed strict gate lockout in combined outage + slip scenario
+Ablation_Suite,Config_J1_temporal_consistency,pos_rmse_m,1.2235,2.1120,+0.8885,PASS,Corrected baseline_runner post-update evaluation state timing
+Ablation_Suite,Config_J3_covariance_growth,pos_rmse_m,2.8676,1.6398,-1.2278,PASS,Corrected covariance propagation during GNSS blackout
+Monte_Carlo,Nominal_Traction_B0_dr,pos_rmse_mean_m,0.0638,0.0638,0.0000,PASS,10-trial Monte Carlo: pure odometry beats EKF when slip=0 and encoder noise is white
+Monte_Carlo,Nominal_Traction_B5_ekf,pos_rmse_mean_m,0.0724,0.0724,0.0000,PASS,10-trial Monte Carlo: EKF noise injected from GNSS/IMU causes 0.072m vs 0.064m
+Monte_Carlo,Asymmetric_Slip_B0_dr,pos_rmse_mean_m,11.7954,11.7954,0.0000,PASS,10-trial Monte Carlo: 50% left-side wheel slip causes massive 11.8m drift
+Monte_Carlo,Asymmetric_Slip_B5_ekf,pos_rmse_mean_m,0.2180,0.2180,0.0000,PASS,10-trial Monte Carlo: EKF rejects wheel slip error down to 0.218m (54x reduction)
+Monte_Carlo,Asymmetric_Slip_A5_robust,pos_rmse_mean_m,0.2261,0.2261,0.0000,PASS,10-trial Monte Carlo: Robust Huber-gated EKF maintains 0.226m
+Monte_Carlo,GNSS_Outage_20s_B0_dr,pos_rmse_mean_m,1.3408,1.3408,0.0000,PASS,10-trial Monte Carlo: uncorrected odometry drifts 1.34m during 20s blackout
+Monte_Carlo,GNSS_Outage_20s_B5_ekf,pos_rmse_mean_m,1.5844,1.5844,0.0000,PASS,10-trial Monte Carlo: EKF drifts 1.58m and recovers upon GNSS restoration
+Monte_Carlo,GNSS_Outage_20s_A5_robust,pos_rmse_mean_m,2.0943,2.0943,0.0000,PASS,10-trial Monte Carlo: Strict innovation gating causes gate lockout and increased drift (2.09m)
+Monte_Carlo,Combined_Stress_B0_dr,pos_rmse_mean_m,11.9253,11.9253,0.0000,PASS,10-trial Monte Carlo: Combined slip + outage causes 11.93m drift
+Monte_Carlo,Combined_Stress_B5_ekf,pos_rmse_mean_m,0.5784,0.5782,-0.0002,PASS,10-trial Monte Carlo: Bias-aware EKF bounds error to 0.578m
+Monte_Carlo,Combined_Stress_A5_robust,pos_rmse_mean_m,0.5401,0.5399,-0.0002,PASS,10-trial Monte Carlo: Robust Huber EKF achieves 0.540m under combined stress
+Monte_Carlo,Compass_Disturbance_B5_ekf,pos_rmse_mean_m,MISSING,2.2920,N/A,PASS,Scenario previously omitted from Monte Carlo script; added and verified
+Monte_Carlo,Compass_Disturbance_A5_robust,pos_rmse_mean_m,MISSING,0.0976,N/A,PASS,Robust innovation gating successfully rejects 25 deg compass declination bias
+Monte_Carlo,GNSS_Multipath_B5_ekf,pos_rmse_mean_m,MISSING,0.9300,N/A,PASS,Scenario previously omitted from Monte Carlo script; added and verified
+Monte_Carlo,GNSS_Multipath_A5_robust,pos_rmse_mean_m,MISSING,0.0919,N/A,PASS,Robust Huber gating suppresses 5m multipath jumps (0.092m vs 0.930m)
+Known_Map_LiDAR,Fixed_PF_N200,pos_rmse_m,0.3421,0.3421,0.0000,PASS,Fixed sample particle filter maintains 0.342m in GNSS-denied testbed
+Known_Map_LiDAR,Adaptive_AMCL_N123,pos_rmse_m,0.3421,0.3421,0.0000,PASS,KLD-sampling adaptive particle filter achieves identical 0.342m with 38% fewer particles (123 vs 200)
+Known_Map_LiDAR,Adaptive_AMCL_N123,latency_ms,26.3,17.9,-8.4,PASS,KLD adaptation provides 31.9% reduction in per-step runtime

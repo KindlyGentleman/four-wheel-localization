@@ -96,8 +96,7 @@ def generate_tradeoffs_figure():
                 means.append(m)
                 errs.append(ci_half)
             else:
-                means.append(0.0)
-                errs.append(0.0)
+                raise RuntimeError(f"Missing Monte Carlo record for scenario '{sc_key}', baseline '{b_key}' in {mc_csv}")
         offset = (b_idx - 1.5) * width
         ax_mc.bar(x + offset, means, width, yerr=errs, capsize=2.0, label=b_label, color=b_col, alpha=0.88, edgecolor="#1E293B", lw=0.5)
 
@@ -162,8 +161,7 @@ def generate_tradeoffs_figure():
             j_pos_rmse.append(float(sub["pos_rmse_m"].iloc[0]))
             j_head_rmse.append(float(sub["heading_rmse_deg"].iloc[0]))
         else:
-            j_pos_rmse.append(0.0)
-            j_head_rmse.append(0.0)
+            raise RuntimeError(f"Missing ablation record for config '{j_key}' in {abl_csv}")
 
     x_j = np.arange(len(j_configs))
     w_j = 0.34

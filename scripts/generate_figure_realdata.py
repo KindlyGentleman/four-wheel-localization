@@ -289,25 +289,47 @@ def generate_main_figure():
     r_mod_disc = _get_row("R4_moderate_degradation")
     r_sev_disc = _get_row("R4_severe_degradation")
     r_clean_conn = _get_row("R4_vision_connected_clean")
+    r_mod_conn = _get_row("R4_vision_connected_moderate")
     r_sev_conn = _get_row("R4_vision_connected_severe")
+
+    # If any required configuration is missing from CSV, raise error rather than fabricating numbers
+    required_rows = {
+        "R4_recoverable_temporal": r_clean_disc,
+        "R4_moderate_degradation": r_mod_disc,
+        "R4_severe_degradation": r_sev_disc,
+        "R4_vision_connected_clean": r_clean_conn,
+        "R4_vision_connected_moderate": r_mod_conn,
+        "R4_vision_connected_severe": r_sev_conn
+    }
+    missing = [k for k, v in required_rows.items() if v is None]
+    if missing:
+        raise RuntimeError(
+            f"Missing required CSV benchmark rows in realdata_summary.csv: {missing}. "
+            "Please run 'python realdata.py' to regenerate verified data."
+        )
 
     modes = ["Clean\n(Nominal)", "Moderate\n(Blur/Dim)", "Severe\n(Dark/Noise)"]
     x_pos = np.arange(len(modes))
 
+    def _to_pct(row):
+        val = float(row["avg_inlier_ratio"])
+        # If stored as fraction [0, 1], scale to percentage [0, 100]
+        return val * 100.0 if val <= 1.0 else val
+
     inlier_ratios = [
-        float(r_clean_disc["avg_inlier_ratio"]) if r_clean_disc is not None else 97.2,
-        float(r_mod_disc["avg_inlier_ratio"]) if r_mod_disc is not None else 84.9,
-        float(r_sev_disc["avg_inlier_ratio"]) if r_sev_disc is not None else 15.0,
+        _to_pct(r_clean_disc),
+        _to_pct(r_mod_disc),
+        _to_pct(r_sev_disc),
     ]
     rmse_disc = [
-        float(r_clean_disc["pos_rmse_m"]) if r_clean_disc is not None else 1.094,
-        float(r_mod_disc["pos_rmse_m"]) if r_mod_disc is not None else 1.094,
-        float(r_sev_disc["pos_rmse_m"]) if r_sev_disc is not None else 1.094,
+        float(r_clean_disc["pos_rmse_m"]),
+        float(r_mod_disc["pos_rmse_m"]),
+        float(r_sev_disc["pos_rmse_m"]),
     ]
     rmse_conn = [
-        float(r_clean_conn["pos_rmse_m"]) if r_clean_conn is not None else 0.837,
-        float(r_clean_conn["pos_rmse_m"]) if r_clean_conn is not None else 0.837,
-        float(r_sev_conn["pos_rmse_m"]) if r_sev_conn is not None else 1.094,
+        float(r_clean_conn["pos_rmse_m"]),
+        float(r_mod_conn["pos_rmse_m"]),
+        float(r_sev_conn["pos_rmse_m"]),
     ]
 
     width = 0.26

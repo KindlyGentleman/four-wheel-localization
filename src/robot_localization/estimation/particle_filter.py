@@ -262,14 +262,15 @@ class ParticleFilter2D:
         self.particles[:, 1] += v_eff * np.sin(th_mid) * dt
         self.particles[:, 2] = wrap_angle_array(th + w_eff * dt)
 
-    def update_scan(
+    def compute_scan_weights(
         self,
         beam_angles_rel: np.ndarray,
         ranges: np.ndarray,
         max_range_m: float = 12.0
     ) -> float:
         """
-        Update particle weights using likelihood field observation model.
+        Update particle weights using likelihood field observation model and compute estimate.
+        Does NOT perform resampling.
         Returns average sample likelihood.
         """
         # Filter valid beams (shorter than max_range)
@@ -318,9 +319,24 @@ class ParticleFilter2D:
 
         avg_likelihood = float(np.mean(weights_unnorm))
 
-        # Update estimates and resample if needed
+        # Update estimates and calculate effective sample size
         self._compute_estimate()
         self.n_eff = 1.0 / float(np.sum(self.weights ** 2))
+
+        return avg_likelihood
+
+    def update_scan(
+        self,
+        beam_angles_rel: np.ndarray,
+        ranges: np.ndarray,
+        max_range_m: float = 12.0
+    ) -> float:
+        """
+        Update particle weights using likelihood field observation model and
+        perform systematic resampling if effective sample size drops below N / 2.
+        Returns average sample likelihood.
+        """
+        avg_likelihood = self.compute_scan_weights(beam_angles_rel, ranges, max_range_m)
 
         if self.n_eff < (self.N / 2.0):
             self.resample_systematic()
@@ -413,9 +429,13 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
         beam_angles_rel: np.ndarray,
         ranges: np.ndarray,
         max_range_m: float = 12.0
-    ):
-        """Update scan with dual-rate recovery tracking and KLD resampling."""
-        avg_likelihood = super().update_scan(beam_angles_rel, ranges, max_range_m)
+    ) -> float:
+        """
+        Update scan with dual-rate recovery tracking and KLD adaptive resampling.
+        Uses compute_scan_weights directly, avoiding premature systematic resampling
+        and preserving authentic posterior weights for KLD sampling.
+        """
+        avg_likelihood = self.compute_scan_weights(beam_angles_rel, ranges, max_range_m)
 
         # Update short and long term filter likelihood averages
         if self.w_slow == 0.0:
@@ -431,9 +451,11 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
         else:
             self.p_random = 0.0
 
-        # Apply KLD-sampling if resampled
+        # Apply single KLD-sampling step if effective sample size drops below threshold
         if self.n_eff < (self.N / 2.0):
             self._kld_resample_and_inject()
+
+        return avg_likelihood
 
     def _kld_resample_and_inject(self):
         """KLD adaptive particle count selection and recovery injection."""
@@ -483,4 +505,5 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
         self.N = len(new_particles)
         self.particles = np.array(new_particles)
         self.weights = np.ones(self.N) / float(self.N)
+        self.n_eff = float(self.N)
         self._compute_estimate()

@@ -35,12 +35,12 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     scenarios = [
-        ("Nominal_Traction", lambda seed: create_scenario_nominal(seed=seed, duration_s=40.0)),
-        ("Asymmetric_Wheel_Slip", lambda seed: create_scenario_slip(seed=seed, duration_s=40.0, slip_ratio_left=0.30)),
-        ("GNSS_Outage_20s", lambda seed: create_scenario_gnss_outage(seed=seed, duration_s=40.0, outage_start_s=10.0, outage_end_s=30.0)),
-        ("Combined_Stress", lambda seed: create_scenario_combined(seed=seed, duration_s=40.0)),
-        ("Compass_Disturbance", lambda seed: create_scenario_compass_disturbance(seed=seed, duration_s=40.0)),
-        ("GNSS_Multipath", lambda seed: create_scenario_multipath(seed=seed, duration_s=40.0)),
+        ("Nominal_Traction", lambda seed: create_scenario_nominal(seed=seed, duration_s=60.0)),
+        ("Asymmetric_Wheel_Slip", lambda seed: create_scenario_slip(seed=seed, duration_s=60.0, slip_ratio_left=0.30)),
+        ("GNSS_Outage_20s", lambda seed: create_scenario_gnss_outage(seed=seed, duration_s=60.0, outage_start_s=15.0, outage_end_s=35.0)),
+        ("Combined_Stress", lambda seed: create_scenario_combined(seed=seed, duration_s=60.0)),
+        ("Compass_Disturbance", lambda seed: create_scenario_compass_disturbance(seed=seed, duration_s=60.0)),
+        ("GNSS_Multipath", lambda seed: create_scenario_multipath(seed=seed, duration_s=60.0)),
     ]
 
     all_summaries = []
@@ -50,7 +50,7 @@ def main():
     num_trials = 10
     for sc_name, sc_gen in scenarios:
         print(f"\n>>> Running {num_trials} Monte Carlo trials for scenario: {sc_name}...")
-        runner = MonteCarloRunner(scenario_generator_func=sc_gen, num_trials=num_trials, seed_base=2000)
+        runner = MonteCarloRunner(scenario_generator_func=sc_gen, num_trials=num_trials, seed_base=2000, duration_s=60.0)
         summary = runner.run(scenario_name=sc_name)
 
         all_raw_dfs.append(summary.raw_metrics_table)

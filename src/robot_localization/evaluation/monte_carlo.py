@@ -52,11 +52,13 @@ class MonteCarloRunner:
         self,
         scenario_generator_func: Callable[[int], Tuple[RobotSimulator, Callable, Callable]],
         num_trials: int = 20,
-        seed_base: int = 1000
+        seed_base: int = 1000,
+        duration_s: float = 60.0
     ):
         self.scenario_gen = scenario_generator_func
         self.num_trials = num_trials
         self.seed_base = seed_base
+        self.duration_s = duration_s
 
     def run(self, scenario_name: str = "benchmark") -> MonteCarloSummary:
         """Execute paired trials across all baselines."""
@@ -68,7 +70,7 @@ class MonteCarloRunner:
 
             # 1. Forward simulation
             sim_result = sim.run_simulation(
-                duration_s=60.0,
+                duration_s=self.duration_s,
                 trajectory_func=traj_func,
                 slip_profile_func=slip_func
             )

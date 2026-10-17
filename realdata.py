@@ -550,6 +550,15 @@ def generate_synthetic_scene_image(
     Generate a synthetic top-down floor camera image conditioned on pose (x, y, yaw).
     Uses fixed world-frame landmarks so KLT optical flow tracks physical translation
     without touching the global NumPy PRNG.
+
+    NOTE ON 2D PLANAR TRANSLATION ASSUMPTION (Finding F13):
+    This procedural ground-plane camera renderer operates under an explicit 2D
+    planar translation model. It renders translational ground texture without
+    3D out-of-plane pitch/roll rotations or camera lens distortion.
+    Lucas-Kanade optical flow feature tracking computes translational floor
+    displacement speed (v_vo = hypot(vx, vy)) to constrain longitudinal wheel
+    spin during unmodeled traction slip. For full 3D stereo geometry with
+    camera extrinsics and disparity, see SyntheticStereoArena in stereo.py.
     """
     img = np.zeros((height, width, 3), dtype=np.uint8)
     x, y, yaw = pose
@@ -1102,9 +1111,10 @@ def run_full_realdata_suite(
         # Disconnected visual tracking degradation study (evaluates optical-flow degradation without PRNG leakage)
         ("R4_moderate_degradation", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "moderate", "disconnected"),
         ("R4_severe_degradation", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "severe", "disconnected"),
-        # Causal vision ablation modes (A: disabled, B: disconnected=R4_recoverable_temporal, C: connected clean, D: connected severe)
+        # Causal vision ablation modes (A: disabled, B: disconnected=R4_recoverable_temporal, C: connected clean, moderate, D: connected severe)
         ("R4_vision_disabled", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "clean", "disabled"),
         ("R4_vision_connected_clean", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "clean", "connected"),
+        ("R4_vision_connected_moderate", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "moderate", "connected"),
         ("R4_vision_connected_severe", "recoverable_ekf", RecoveryStrategy.R1_TEMPORAL_CONSISTENCY, "severe", "connected"),
     ]
 

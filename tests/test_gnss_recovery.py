@@ -149,3 +149,160 @@ def test_multipath_rejection_under_r1():
     # The jump between 5.0 and 0.1 is 4.9 m/s, exceeding max physical speed,
     # so the bad fix was NOT confirmed as a trajectory, and the true fix tracks
     assert acc_good or len(filter_inst.gnss_buffer) >= 1
+
+
+def test_persistent_reverse_multipath_rejection():
+    """
+    Verify that correlated reverse multipath vectors are rejected.
+    Robot moves forward at 1.0 m/s East.
+    Two consecutive multipath fixes arrive indicating motion West at 1.0 m/s.
+    Vector check must reject these fixes even though scalar speed matches.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001]),
+        relative_disp_tol_m=0.50
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.04, 0.04])
+
+    for _ in range(int(20.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    acc1, _ = filter_inst.update_gnss_recoverable(21.0, np.array([10.0, 0.0]), R_gnss)
+    assert not acc1
+
+    for _ in range(int(1.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    acc2, reason2 = filter_inst.update_gnss_recoverable(22.0, np.array([9.0, 0.0]), R_gnss)
+    assert not acc2, "Reverse multipath should be rejected by vector displacement consistency"
+    assert "Displacement discrepancy" in reason2
+
+
+def test_static_multipath_pinning_rejection():
+    """
+    Verify that static multipath pinning (receiver repeats identical coordinate while robot moves)
+    is rejected by the consistency check.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001]),
+        relative_disp_tol_m=0.40
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.01, 0.01])
+
+    for _ in range(int(15.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    acc1, _ = filter_inst.update_gnss_recoverable(16.0, np.array([5.0, 5.0]), R_gnss)
+    assert not acc1
+
+    for _ in range(int(1.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    acc2, reason2 = filter_inst.update_gnss_recoverable(17.0, np.array([5.0, 5.0]), R_gnss)
+    assert not acc2, "Static multipath while driving should be rejected"
+    assert "Displacement discrepancy" in reason2
+
+
+def test_recovery_during_turning_maneuver():
+    """
+    Verify recovery when the robot executes a turning maneuver (non-zero yaw rate)
+    during the outage.
+    """
+    np.random.seed(42)
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R1_TEMPORAL_CONSISTENCY,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.09, 0.09])
+
+    true_pose = np.zeros(3)
+    for step in range(int(15.0 / dt)):
+        true_pose[0] += 0.92 * np.cos(true_pose[2]) * dt
+        true_pose[1] += 0.92 * np.sin(true_pose[2]) * dt
+        true_pose[2] += 0.10 * dt
+
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.10, gyro_z=0.10,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+        )
+
+    for k in range(3):
+        for _ in range(int(1.0 / dt)):
+            true_pose[0] += 0.92 * np.cos(true_pose[2]) * dt
+            true_pose[1] += 0.92 * np.sin(true_pose[2]) * dt
+            true_pose[2] += 0.10 * dt
+            filter_inst.predict_recoverable(
+                v_enc=1.0, omega_enc=0.10, gyro_z=0.10,
+                Q_u_base=Qu, dt=dt, wheel_disagreement=0.08
+            )
+        t_fix = 15.0 + (k + 1) * 1.0
+        z_gnss = true_pose[:2] + np.random.normal(0, 0.02, size=2)
+        acc, _ = filter_inst.update_gnss_recoverable(t_fix, z_gnss, R_gnss)
+        if k >= 1:
+            assert acc, f"Should recover on fix {k+1} during curved trajectory"
+
+    pos_err = np.linalg.norm(filter_inst.x[:2] - true_pose[:2])
+    assert pos_err < 0.60, f"Expected post-recovery error < 0.60m, got {pos_err:.2f}m"
+
+
+def test_rep105_odometry_continuity_during_r4_jump():
+    """
+    Verify REP-105 adherence: during an R4 global re-anchoring jump in the map frame,
+    the odom_pose remains smooth and continuous, and map_to_odom records the shift.
+    """
+    filter_inst = RecoverableRobustEKF4D(
+        strategy=RecoveryStrategy.R4_GLOBAL_REINITIALIZATION,
+        initial_state=np.zeros(4),
+        initial_cov=np.diag([0.01, 0.01, 0.005, 0.001])
+    )
+    dt = 0.02
+    Qu = np.diag([1e-4, 2.5e-5])
+    R_gnss = np.diag([0.04, 0.04])
+
+    for _ in range(int(10.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    z1 = np.array([13.0, 0.0])
+    acc1, _ = filter_inst.update_gnss_recoverable(11.0, z1, R_gnss)
+    assert not acc1
+
+    for _ in range(int(1.0 / dt)):
+        filter_inst.predict_recoverable(
+            v_enc=1.0, omega_enc=0.0, gyro_z=0.0,
+            Q_u_base=Qu, dt=dt, wheel_disagreement=0.05
+        )
+
+    z2 = np.array([14.0, 0.0])
+    acc2, _ = filter_inst.update_gnss_recoverable(12.0, z2, R_gnss)
+    assert acc2
+
+    assert abs(filter_inst.odom_pose[0] - 11.0) < 0.20
+    assert abs(filter_inst.x[0] - 14.0) < 0.50
+    assert abs(filter_inst.map_to_odom[0]) > 2.0
+

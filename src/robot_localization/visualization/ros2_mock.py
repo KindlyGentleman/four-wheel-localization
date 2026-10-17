@@ -30,11 +30,52 @@ class TransformStamped:
     rotation_rpy: Tuple[float, float, float] # Roll, pitch, yaw (rad)
 
 
+def _rpy_to_matrix(r: float, p: float, y: float) -> np.ndarray:
+    cr, sr = math.cos(r), math.sin(r)
+    cp, sp = math.cos(p), math.sin(p)
+    cy, sy = math.cos(y), math.sin(y)
+    return np.array([
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr]
+    ])
+
+
+def _matrix_to_rpy(R: np.ndarray) -> Tuple[float, float, float]:
+    pitch = math.atan2(-R[2, 0], math.sqrt(R[2, 1]**2 + R[2, 2]**2))
+    if abs(math.cos(pitch)) > 1e-6:
+        roll = math.atan2(R[2, 1], R[2, 2])
+        yaw = math.atan2(R[1, 0], R[0, 0])
+    else:
+        roll = math.atan2(-R[1, 2], R[1, 1])
+        yaw = 0.0
+    return (roll, pitch, yaw)
+
+
+def _tf_to_mat4(tf: TransformStamped) -> np.ndarray:
+    T = np.eye(4)
+    T[:3, :3] = _rpy_to_matrix(*tf.rotation_rpy)
+    T[:3, 3] = tf.translation
+    return T
+
+
+def _mat4_to_tf(T: np.ndarray, parent: str, child: str, stamp: float) -> TransformStamped:
+    trans = (float(T[0, 3]), float(T[1, 3]), float(T[2, 3]))
+    rpy = _matrix_to_rpy(T[:3, :3])
+    return TransformStamped(
+        header=ROSHeader(seq=0, stamp=stamp, frame_id=parent),
+        child_frame_id=child,
+        translation=trans,
+        rotation_rpy=rpy
+    )
+
+
 class MockTFTree:
     """
     Maintains coordinate frame relationships adhering strictly to ROS REP-105.
     Tree structure:
       map -> odom -> base_link -> [imu_link, gnss_antenna, lidar_link, camera_link -> camera_left_optical]
+    Provides full SE(2)/SE(3) transform chaining and multi-hop lookup.
     """
 
     def __init__(self):
@@ -42,6 +83,7 @@ class MockTFTree:
         self.static_transforms: Dict[str, TransformStamped] = {}
         # Dynamic transforms updated by estimators
         self.dynamic_transforms: Dict[str, TransformStamped] = {}
+        self.parent_of: Dict[str, str] = {}
 
         self._setup_default_transforms()
 
@@ -67,6 +109,7 @@ class MockTFTree:
             rotation_rpy=rpy
         )
         self.static_transforms[f"{parent}->{child}"] = tf
+        self.parent_of[child] = parent
 
     def update_dynamic_transform(self, parent: str, child: str, trans: Tuple[float, float, float], rpy: Tuple[float, float, float], stamp: float):
         tf = TransformStamped(
@@ -76,6 +119,7 @@ class MockTFTree:
             rotation_rpy=rpy
         )
         self.dynamic_transforms[f"{parent}->{child}"] = tf
+        self.parent_of[child] = parent
 
     def get_transform(self, parent: str, child: str) -> Optional[TransformStamped]:
         key = f"{parent}->{child}"
@@ -84,6 +128,77 @@ class MockTFTree:
         if key in self.static_transforms:
             return self.static_transforms[key]
         return None
+
+    def lookup_transform(self, target_frame: str, source_frame: str) -> Optional[TransformStamped]:
+        """
+        Look up the transformation that maps points in source_frame to target_frame.
+        Supports multi-hop tree traversal and SE(3) matrix composition following ROS TF2 conventions.
+        """
+        if target_frame == source_frame:
+            return TransformStamped(
+                header=ROSHeader(seq=0, stamp=0.0, frame_id=target_frame),
+                child_frame_id=source_frame,
+                translation=(0.0, 0.0, 0.0),
+                rotation_rpy=(0.0, 0.0, 0.0)
+            )
+
+        def _get_chain_to_root(frame: str) -> List[str]:
+            chain = [frame]
+            curr = frame
+            while curr in self.parent_of:
+                curr = self.parent_of[curr]
+                chain.append(curr)
+            return chain
+
+        target_chain = _get_chain_to_root(target_frame)
+        source_chain = _get_chain_to_root(source_frame)
+
+        # Find lowest common ancestor
+        common_ancestor = None
+        for f in source_chain:
+            if f in target_chain:
+                common_ancestor = f
+                break
+
+        if common_ancestor is None:
+            return None
+
+        # Helper to compute transform from root/ancestor down to descendant: T_ancestor_descendant
+        def _compute_transform_down(ancestor: str, descendant: str) -> np.ndarray:
+            if ancestor == descendant:
+                return np.eye(4)
+            # Path from descendant up to ancestor
+            path_up = []
+            c = descendant
+            while c != ancestor:
+                p = self.parent_of[c]
+                path_up.append((p, c))
+                c = p
+            # Reverse to compose from ancestor down to descendant
+            T = np.eye(4)
+            for p, ch in reversed(path_up):
+                tf = self.get_transform(p, ch)
+                if tf is None:
+                    return np.eye(4)
+                T = T @ _tf_to_mat4(tf)
+            return T
+
+        T_anc_target = _compute_transform_down(common_ancestor, target_frame)
+        T_anc_source = _compute_transform_down(common_ancestor, source_frame)
+
+        # T_target_source = (T_anc_target)^-1 * T_anc_source
+        T_target_anc = np.linalg.inv(T_anc_target)
+        T_target_source = T_target_anc @ T_anc_source
+
+        # Get stamp from the most recent transform in the lookup
+        stamp = 0.0
+        for f in [target_frame, source_frame]:
+            if f in self.parent_of:
+                direct_tf = self.get_transform(self.parent_of[f], f)
+                if direct_tf:
+                    stamp = max(stamp, direct_tf.header.stamp)
+
+        return _mat4_to_tf(T_target_source, target_frame, source_frame, stamp)
 
     def get_frame_hierarchy(self) -> Dict[str, Any]:
         """Return human-readable representation of TF hierarchy."""

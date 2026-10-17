@@ -15,10 +15,9 @@ In textbook examples, this protects the state estimate from multipath jumps and 
 I wanted to test this in a controlled, repeatable environment without running a full robotics simulator stack.
 
 To keep the vehicle kinematics grounded in real motion, I used the 2D ground-truth trajectory from the outdoor M2DGR `Anomaly` dataset run (Clearpath Husky rover, Shanghai Jiao Tong University). I wrote synthetic sensor generators around that reference trajectory in pure Python:
-- Four independent wheel encoders with quantization and slip injection (50 Hz)
-- Chassis IMU yaw rate with uncompensated rate bias (50 Hz)
-- Absolute GNSS position fixes with an injected 20-second blackout (1 Hz)
-- Procedural ground texture with OpenCV Lucas-Kanade feature tracking (10 Hz)
+- Simulation suite: Four independent wheel encoders (50 Hz), chassis IMU (50 Hz), compass (10 Hz), and GNSS fixes (1 Hz)
+- Hybrid M2DGR-plus benchmark: Ground-truth trajectory cadence of ~5.0 Hz (233 poses over 46.2s) with ~5.0 Hz odometry, IMU, and downward camera flow, and ~2.5 Hz GNSS (every second epoch)
+- Procedural ground texture with OpenCV Lucas-Kanade feature tracking (tracking ground displacement)
 - Synthetic stereo camera and 2D landmark LiDAR models
 
 The entire pipeline runs in standalone Python with NumPy, SciPy, Matplotlib, and OpenCV. No ROS installation is required.
@@ -52,7 +51,7 @@ The main experiment simulates a 20-second complete GNSS blackout ($t = 14.0$ s t
 
 - **(a) Downward Optical Flow:** Downward-looking camera tracking FAST keypoints across procedural ground texture with Lucas-Kanade optical flow. The measured pixel displacement provides direct body-frame linear velocity $(\Delta x, \Delta y)$ independent of wheel contact.
 - **(b) Planar Trajectory on M2DGR Track:** Ground truth trajectory from an outdoor Clearpath Husky rover (`Anomaly` track, black). Dead reckoning (violet) drifts off-course during the slip and blackout segment. The strict innovation gate (red) permanently locks out. The standard EKF (blue) recovers after a 2.85 s transient overshoot. The recoverable EKF (green) re-anchors smoothly, adhering to the ROS REP-105 standard (continuous `odom -> base_link` frame with a discrete `map -> odom` transform offset).
-- **(c) Multi-Sensor Availability Timeline:** Timeline showing sensor update rates: Encoders (50 Hz), IMU (50 Hz), Camera Optical Flow (10 Hz), and GNSS fixes (1 Hz). Highlights the 20-second GNSS outage window ($t = 14.0$ to $34.0$ s) and the overlapping wheel slip event ($t = 13.0$ to $18.0$ s).
+- **(c) Multi-Sensor Availability Timeline:** Timeline showing hybrid sensor cadences: Wheel Odometry (~5 Hz), IMU (~5 Hz), Camera Optical Flow (~5 Hz), and GNSS fixes (~2.5 Hz). Highlights the 20-second GNSS outage window ($t = 14.0$ to $34.0$ s) and the overlapping wheel slip event ($t = 13.0$ to $18.0$ s).
 - **(d) Position Error Over Time:** Quantitative time-series error $e(t)$. During the blackout, drift climbs to roughly 2.1 m. At $t = 34.0$ s, the strict filter rejects all incoming fixes ($0/27$ accepted), causing permanent divergence (red line). Recoverable strategies drop error back below 0.3 m within 0.86 to 1.86 s.
 - **(e) Causal Vision Ablation:** Rigorous four-mode test proving causal impact. Mode A (Vision Off: 1.094 m) and Mode B (Vision Disconnected: 1.094 m) are identical, proving zero side-effects. Mode C (Vision Connected: 0.837 m) delivers an authentic 23.5% error reduction during slip. Mode D (Vision Degraded: 1.094 m) demonstrates that the innovation gate safely rejects corrupt visual velocities.
 - **(f) Recovery Strategy Trade-off:** Scatter plot mapping Position RMSE against Post-Outage GNSS Acceptance percentage across all 8 baselines (R0 to R7). Shows that strict gating (R3) scores 0% acceptance and 1.36 m RMSE, whereas temporal consistency (R4) and covariance inflation (R6) achieve 96.3% to 100% acceptance with optimal 1.06 m to 1.09 m RMSE.
@@ -63,7 +62,7 @@ During the blackout, the robot navigates purely on dead reckoning and IMU integr
 
 - **Strict Innovation Gate (R3 / Gate Lockout):** The filter estimated covariance grows slower than the actual physical drift. When valid GNSS fixes resume, their innovation exceeds the 99% Chi-square threshold ($\chi^2 > 9.21$). The filter rejects every incoming fix ($0/27$ post-outage fixes accepted). The robot stays permanently lost.
 - **Ungated Standard EKF (R1):** The filter immediately accepts the first post-outage fix. However, the large innovation shock causes a transient overshoot before settling after 2.85 seconds.
-- **Temporal Consistency Window (R4):** The filter requires $M = 3$ consecutive spatially consistent fixes before triggering a state re-anchoring. It recovers within 1.86 seconds, accepts 96.3% of post-outage fixes, and avoids chasing single multipath outliers.
+- **Temporal Consistency Window (R4):** The filter requires $M = 2$ consecutive spatially consistent fixes before triggering a state re-anchoring. It recovers within 1.86 seconds, accepts 96.3% of post-outage fixes, and avoids chasing single multipath outliers.
 - **Covariance Inflation (R6):** The filter inflates process covariance proportional to outage duration. This expands the acceptance gate dynamically and absorbs the first fix within 0.86 seconds.
 - **Global Re-initialization (R7):** Resets position directly to the verified fix. An early bug reset covariance to an identity matrix ($\mathbf{P} = \mathbf{I}$), which caused the filter to diverge to 15.3 m. Preserving positive-definite block covariance fixed this completely, achieving stable recovery at 1.09 m RMSE.
 
@@ -138,7 +137,7 @@ pip install -e .
 Run tests and experiments:
 
 ```bash
-# 1. Run all 71 unit and regression tests (~35s)
+# 1. Run all 83 unit and regression tests (~35s)
 python -m pytest tests/
 
 # 2. Run the hybrid benchmark and causal vision ablation (~12s)

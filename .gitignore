@@ -22,10 +22,6 @@ four-wheel-localization/
 *.gif
 videos/
 extras/
-AUDIT.md
-reports/*AUDIT*.md
-reports/DATA_PROVENANCE.md
-reports/METRIC_RECALCULATION.csv
 reports/original_results_backup/
 
 # OS artifacts

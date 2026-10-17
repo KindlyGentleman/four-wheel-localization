@@ -189,3 +189,46 @@ def test_r7_global_reinitialization_psd_and_recovery():
     # Verify odom frame remains continuous (no jump > 0.15m per step)
     odom_diffs = np.hypot(np.diff(res_r7.est_poses_odom[:, 0]), np.diff(res_r7.est_poses_odom[:, 1]))
     assert float(np.max(odom_diffs)) < 0.15
+
+
+def test_amcl_adaptive_single_resampling_and_posterior_weights():
+    """
+    Regression test for Finding F10:
+    Verify that AMCLAdaptiveParticleFilter2D does NOT perform duplicate resampling.
+    Ensures that scan likelihood weights are preserved for KLD sampling, and
+    resampling occurs exactly once, correctly drawing from the posterior likelihood.
+    """
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    true_pose = np.array([2.0, 2.0, 0.5])
+    angles, ranges = v_map.simulate_lidar_scan(true_pose, num_beams=16, max_range_m=12.0)
+
+    rng = np.random.RandomState(42)
+    amcl = AMCLAdaptiveParticleFilter2D(
+        occupancy_map=v_map,
+        min_particles=50,
+        max_particles=300,
+        initial_pose=true_pose,
+        rng=rng
+    )
+
+    # 1. Verify compute_scan_weights updates weights without resampling
+    avg_lik = amcl.compute_scan_weights(angles, ranges)
+    assert avg_lik > 0.0
+    # Weights should be non-uniform (highest near true pose)
+    assert np.max(amcl.weights) > np.min(amcl.weights)
+    # Number of particles unchanged before adaptive step
+    assert amcl.N == 300
+
+    # 2. Run update_scan_adaptive: should execute single KLD resampling step
+    amcl.update_scan_adaptive(angles, ranges)
+    assert amcl.N_min <= amcl.N <= amcl.N_max
+    # After KLD resampling, weights are reset to uniform 1/N
+    np.testing.assert_allclose(amcl.weights, np.ones(amcl.N) / float(amcl.N))
+    assert abs(amcl.n_eff - float(amcl.N)) < 1e-6
+
+    # 3. Estimated pose should remain close to ground truth
+    pos_err = math.hypot(amcl.estimated_pose[0] - true_pose[0], amcl.estimated_pose[1] - true_pose[1])
+    assert pos_err < 0.50
+

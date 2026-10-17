@@ -138,10 +138,8 @@ def test_extreme_visual_degradations_and_clahe():
 def test_point_cloud_icp_registration():
     """Verify ICP registration between two synthetic point clouds under small displacement."""
     rng = np.random.RandomState(42)
-    # Generate non-degenerate 3D cluster of surface points (e.g. boulders / surface rocks)
     target_pts = rng.uniform(-2.0, 2.0, (400, 3))
 
-    # Displace source by dx = 0.08m, dy = 0.03m
     dx_true = 0.08
     dy_true = 0.03
     source_pts = target_pts.copy()
@@ -156,6 +154,75 @@ def test_point_cloud_icp_registration():
 
     assert res.success
     assert res.fitness > 0.80
-    # To map source back to target, dx is -0.08, dy is -0.03
     assert math.isclose(res.dx_m, -dx_true, abs_tol=0.01)
     assert math.isclose(res.dy_m, -dy_true, abs_tol=0.01)
+
+
+def test_point_cloud_icp_cpu_svd_forced():
+    """Verify genuine CPU-only SVD ICP algorithm independently of Open3D."""
+    rng = np.random.RandomState(101)
+    target_pts = rng.uniform(-2.0, 2.0, (500, 3))
+
+    dx_true = 0.06
+    dy_true = -0.04
+    source_pts = target_pts.copy()
+    source_pts[:, 0] += dx_true
+    source_pts[:, 1] += dy_true
+
+    res = register_point_clouds_icp(
+        source_pts_base=source_pts,
+        target_pts_base=target_pts,
+        max_correspondence_dist_m=0.30,
+        force_cpu=True
+    )
+
+    assert res.success
+    assert res.fitness > 0.85
+    assert res.inlier_rmse_m < 0.05
+    assert math.isclose(res.dx_m, -dx_true, abs_tol=0.01)
+    assert math.isclose(res.dy_m, -dy_true, abs_tol=0.01)
+
+
+def test_point_cloud_icp_rotation_and_translation():
+    """Verify ICP recovers combined planar translation and yaw rotation."""
+    rng = np.random.RandomState(202)
+    target_pts = rng.uniform(-2.0, 2.0, (600, 3))
+
+    yaw_true = math.radians(4.0)
+    dx_true, dy_true = 0.05, 0.02
+
+    c, s = math.cos(yaw_true), math.sin(yaw_true)
+    R_mat = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    source_pts = (R_mat @ target_pts.T).T + np.array([dx_true, dy_true, 0.0])
+
+    res = register_point_clouds_icp(
+        source_pts_base=source_pts,
+        target_pts_base=target_pts,
+        max_correspondence_dist_m=0.40,
+        force_cpu=True
+    )
+
+    assert res.success
+    assert res.fitness > 0.80
+    assert res.inlier_rmse_m < 0.05
+    assert math.isclose(math.degrees(res.dtheta_rad), -4.0, abs_tol=0.2)
+
+
+def test_point_cloud_icp_honest_rejections():
+    """Verify that insufficient points and non-overlapping clouds honestly report failure."""
+    rng = np.random.RandomState(303)
+
+    # 1. Too few points (< 20)
+    pts_few_a = rng.uniform(-1.0, 1.0, (10, 3))
+    pts_few_b = rng.uniform(-1.0, 1.0, (10, 3))
+    res_few = register_point_clouds_icp(pts_few_a, pts_few_b, force_cpu=True)
+    assert not res_few.success
+    assert res_few.fitness == 0.0
+    assert res_few.correspondence_count == 0
+
+    # 2. Non-overlapping clusters (separated by 10m when max dist is 0.5m)
+    pts_src = rng.uniform(0.0, 1.0, (100, 3))
+    pts_tgt = rng.uniform(10.0, 11.0, (100, 3))
+    res_far = register_point_clouds_icp(pts_src, pts_tgt, max_correspondence_dist_m=0.50, force_cpu=True)
+    assert not res_far.success
+    assert res_far.fitness < 0.10

@@ -6,7 +6,11 @@ pandas>=2.0.0
 pyyaml>=6.0
 opencv-python>=4.8.0
 Pillow>=9.5.0
+rosbags>=0.10.0
 
 # Testing and publication styling
 pytest>=7.0.0
 scienceplots>=2.1.0
+
+# Optional 3D point-cloud registration
+# open3d>=0.17.0

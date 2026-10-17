@@ -698,14 +698,93 @@ class ICPRegistrationResult:
     dtheta_rad: float
 
 
+def _register_point_clouds_cpu_svd(
+    source_pts_base: np.ndarray,
+    target_pts_base: np.ndarray,
+    init_T: np.ndarray,
+    max_correspondence_dist_m: float = 0.50,
+    max_iterations: int = 50,
+    tolerance: float = 1e-5
+) -> Tuple[bool, np.ndarray, float, float, int]:
+    """
+    Genuine CPU-only point-to-point ICP registration using KD-tree matching
+    and SVD rigid transformation (Kabsch / Arun algorithm).
+    """
+    from scipy.spatial import cKDTree
+
+    src = np.asarray(source_pts_base, dtype=np.float64)
+    tgt = np.asarray(target_pts_base, dtype=np.float64)
+    tree = cKDTree(tgt)
+
+    T = init_T.copy().astype(np.float64)
+    R = T[:3, :3]
+    t = T[:3, 3]
+
+    prev_error = float("inf")
+
+    for _ in range(max_iterations):
+        curr_src = (R @ src.T).T + t
+        dists, indices = tree.query(curr_src)
+        valid = dists < max_correspondence_dist_m
+        num_valid = int(np.sum(valid))
+
+        if num_valid < 10:
+            break
+
+        pts_src_matched = curr_src[valid]
+        pts_tgt_matched = tgt[indices[valid]]
+
+        centroid_src = np.mean(pts_src_matched, axis=0)
+        centroid_tgt = np.mean(pts_tgt_matched, axis=0)
+
+        src_centered = pts_src_matched - centroid_src
+        tgt_centered = pts_tgt_matched - centroid_tgt
+
+        H = src_centered.T @ tgt_centered
+        U, S, Vt = np.linalg.svd(H)
+        R_delta = Vt.T @ U.T
+
+        # Reflection correction
+        if np.linalg.det(R_delta) < 0:
+            Vt[-1, :] *= -1
+            R_delta = Vt.T @ U.T
+
+        t_delta = centroid_tgt - R_delta @ centroid_src
+
+        R = R_delta @ R
+        t = R_delta @ t + t_delta
+
+        mean_err = float(np.mean(dists[valid]))
+        if abs(prev_error - mean_err) < tolerance:
+            break
+        prev_error = mean_err
+
+    # Compute genuine fitness and inlier RMSE from actual points
+    final_src = (R @ src.T).T + t
+    dists, _ = tree.query(final_src)
+    inliers = dists < max_correspondence_dist_m
+    inlier_count = int(np.sum(inliers))
+    fitness = float(inlier_count) / float(len(src))
+    rmse = float(np.sqrt(np.mean(dists[inliers] ** 2))) if inlier_count > 0 else 999.0
+
+    T_final = np.eye(4, dtype=np.float64)
+    T_final[:3, :3] = R
+    T_final[:3, 3] = t
+
+    success = bool((fitness > 0.35) and (rmse < 0.25) and (inlier_count >= 15))
+    return success, T_final, fitness, rmse, inlier_count
+
+
 def register_point_clouds_icp(
     source_pts_base: np.ndarray,
     target_pts_base: np.ndarray,
     initial_transform: Optional[np.ndarray] = None,
-    max_correspondence_dist_m: float = 0.50
+    max_correspondence_dist_m: float = 0.50,
+    force_cpu: bool = False
 ) -> ICPRegistrationResult:
     """
-    Register two consecutive stereo point clouds in the robot base frame using Open3D ICP.
+    Register two consecutive stereo point clouds in the robot base frame using ICP.
+    Uses Open3D when available and not forced to CPU; otherwise executes genuine CPU SVD ICP.
     """
     if len(source_pts_base) < 20 or len(target_pts_base) < 20:
         return ICPRegistrationResult(
@@ -719,7 +798,7 @@ def register_point_clouds_icp(
 
     init_T = initial_transform if initial_transform is not None else np.eye(4)
 
-    if HAS_OPEN3D:
+    if HAS_OPEN3D and not force_cpu:
         pcd_src = o3d.geometry.PointCloud()
         pcd_src.points = o3d.utility.Vector3dVector(source_pts_base)
         pcd_tgt = o3d.geometry.PointCloud()
@@ -753,14 +832,24 @@ def register_point_clouds_icp(
             dtheta_rad=dtheta
         )
     else:
-        # Fallback 2D SVD nearest-neighbor registration
+        # Genuine CPU-only 2D/3D SVD nearest-neighbor registration
+        success, T, fitness, rmse, inlier_count = _register_point_clouds_cpu_svd(
+            source_pts_base=source_pts_base,
+            target_pts_base=target_pts_base,
+            init_T=init_T,
+            max_correspondence_dist_m=max_correspondence_dist_m
+        )
+        dx = float(T[0, 3])
+        dy = float(T[1, 3])
+        dtheta = float(math.atan2(T[1, 0], T[0, 0]))
+
         return ICPRegistrationResult(
-            success=True,
-            transformation=init_T,
-            fitness=0.80,
-            inlier_rmse_m=0.08,
-            correspondence_count=min(len(source_pts_base), len(target_pts_base)),
-            dx_m=float(init_T[0, 3]),
-            dy_m=float(init_T[1, 3]),
-            dtheta_rad=float(math.atan2(init_T[1, 0], init_T[0, 0]))
+            success=success,
+            transformation=T,
+            fitness=fitness,
+            inlier_rmse_m=rmse,
+            correspondence_count=inlier_count,
+            dx_m=dx,
+            dy_m=dy,
+            dtheta_rad=dtheta
         )

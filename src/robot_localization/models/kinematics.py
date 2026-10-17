@@ -113,3 +113,61 @@ def integrate_pose_rk2(pose: np.ndarray, v: float, omega: float, dt: float) -> n
     y_next = y + v * math.sin(theta_mid) * dt
     theta_next = wrap_angle(theta + omega * dt)
     return np.array([x_next, y_next, theta_next])
+
+
+def se2_compose(t1: np.ndarray, t2: np.ndarray) -> np.ndarray:
+    """
+    Compose two 2D rigid-body transformations in SE(2): T_12 = T_1 * T_2.
+    Each transform is represented as [x, y, theta] with theta in radians.
+
+    Args:
+        t1: Parent transform [x1, y1, theta1]
+        t2: Child transform [x2, y2, theta2]
+
+    Returns:
+        Composed transform [x_12, y_12, theta_12] in SE(2).
+    """
+    x1, y1, th1 = float(t1[0]), float(t1[1]), float(t1[2])
+    x2, y2, th2 = float(t2[0]), float(t2[1]), float(t2[2])
+    c1, s1 = math.cos(th1), math.sin(th1)
+    x12 = x1 + c1 * x2 - s1 * y2
+    y12 = y1 + s1 * x2 + c1 * y2
+    th12 = wrap_angle(th1 + th2)
+    return np.array([x12, y12, th12])
+
+
+def se2_inverse(t: np.ndarray) -> np.ndarray:
+    """
+    Compute analytical inverse of an SE(2) rigid-body transform: T^-1.
+    Satisfies se2_compose(t, se2_inverse(t)) == [0, 0, 0] within floating tolerance.
+
+    Args:
+        t: Transform [x, y, theta]
+
+    Returns:
+        Inverse transform [x_inv, y_inv, theta_inv].
+    """
+    x, y, th = float(t[0]), float(t[1]), float(t[2])
+    c, s = math.cos(th), math.sin(th)
+    x_inv = -c * x - s * y
+    y_inv = s * x - c * y
+    th_inv = wrap_angle(-th)
+    return np.array([x_inv, y_inv, th_inv])
+
+
+def compute_map_to_odom_se2(map_pose: np.ndarray, odom_pose: np.ndarray) -> np.ndarray:
+    """
+    Compute SE(2) transform from map frame to odom frame following ROS REP-105:
+      T_map_base = T_map_odom * T_odom_base
+      => T_map_odom = T_map_base * (T_odom_base)^-1
+
+    Args:
+        map_pose: Global robot pose in map frame [x_m, y_m, theta_m]
+        odom_pose: Smooth local robot pose in odom frame [x_o, y_o, theta_o]
+
+    Returns:
+        map_to_odom transform [x_mo, y_mo, theta_mo] in SE(2).
+    """
+    odom_inv = se2_inverse(odom_pose)
+    return se2_compose(map_pose, odom_inv)
+

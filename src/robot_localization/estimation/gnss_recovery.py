@@ -47,6 +47,7 @@ class BufferedGNSSFix:
     covariance_enu: np.ndarray      # 2x2
     nis_against_prior: float
     integrated_dr_distance: float
+    dr_position: Optional[np.ndarray] = None
 
 
 class RecoverableRobustEKF4D(RobustEKF4D):
@@ -255,7 +256,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
             position_enu=z_gnss.copy(),
             covariance_enu=R_gnss.copy(),
             nis_against_prior=nis,
-            integrated_dr_distance=self.total_dr_distance
+            integrated_dr_distance=self.total_dr_distance,
+            dr_position=self.odom_pose[:2].copy()
         )
         self.gnss_buffer.append(buf_item)
         if len(self.gnss_buffer) > 10:
@@ -336,7 +338,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
                 jump = post_pos - pre_pos
                 jump_dist = float(np.linalg.norm(jump))
                 if jump_dist > 0.05:
-                    self.map_to_odom[:2] += jump
+                    from robot_localization.models.kinematics import compute_map_to_odom_se2
+                    self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
                     self.relocalization_events.append({
                         "time": t,
                         "pre_pos": pre_pos.copy(),
@@ -384,15 +387,20 @@ class RecoverableRobustEKF4D(RobustEKF4D):
                 return False, "Zero or negative dt"
 
             # 1. Kinematic speed test
-            disp_gnss = float(np.linalg.norm(fix_curr.position_enu - fix_prev.position_enu))
+            delta_gnss = fix_curr.position_enu - fix_prev.position_enu
+            disp_gnss = float(np.linalg.norm(delta_gnss))
             apparent_speed = disp_gnss / dt
 
             if apparent_speed > self.max_physical_speed:
                 return False, f"Implausible speed {apparent_speed:.2f} m/s > {self.max_physical_speed} m/s"
 
-            # 2. Relative displacement consistency with dead reckoning
-            dr_dist = abs(fix_curr.integrated_dr_distance - fix_prev.integrated_dr_distance)
-            discrepancy = abs(disp_gnss - dr_dist)
+            # 2. Relative displacement consistency with dead reckoning (vector check)
+            if fix_curr.dr_position is not None and fix_prev.dr_position is not None:
+                delta_dr = fix_curr.dr_position - fix_prev.dr_position
+                discrepancy = float(np.linalg.norm(delta_gnss - delta_dr))
+            else:
+                dr_dist = abs(fix_curr.integrated_dr_distance - fix_prev.integrated_dr_distance)
+                discrepancy = abs(disp_gnss - dr_dist)
 
             thresh = self.relative_disp_tol + 2.0 * float(np.sqrt(np.trace(fix_curr.covariance_enu)))
             if discrepancy > thresh:
@@ -448,7 +456,8 @@ class RecoverableRobustEKF4D(RobustEKF4D):
         jump = post_pos - pre_pos
         jump_dist = float(np.linalg.norm(jump))
         if jump_dist > 0.05:
-            self.map_to_odom[:2] += jump
+            from robot_localization.models.kinematics import compute_map_to_odom_se2
+            self.map_to_odom = compute_map_to_odom_se2(self.x[:3], self.odom_pose)
             self.relocalization_events.append({
                 "pre_pos": pre_pos.copy(),
                 "post_pos": post_pos.copy(),
