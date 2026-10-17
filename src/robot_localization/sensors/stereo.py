@@ -66,9 +66,36 @@ class StereoCameraConfig:
         Q[1, 1] = 1.0
         Q[1, 3] = -self.cy
         Q[2, 3] = self.fx
-        Q[3, 2] = -1.0 / self.baseline_m
+        Q[3, 2] = 1.0 / self.baseline_m
         Q[3, 3] = 0.0
         return Q
+
+
+def euler_rpy_to_rotation_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Compute 3x3 rotation matrix from intrinsic Euler roll, pitch, yaw angles (radians)."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+
+    R_x = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0,  cr, -sr],
+        [0.0,  sr,  cr]
+    ], dtype=np.float64)
+
+    R_y = np.array([
+        [ cp, 0.0,  sp],
+        [0.0, 1.0, 0.0],
+        [-sp, 0.0,  cp]
+    ], dtype=np.float64)
+
+    R_z = np.array([
+        [ cy, -sy, 0.0],
+        [ sy,  cy, 0.0],
+        [0.0, 0.0, 1.0]
+    ], dtype=np.float64)
+
+    return R_z @ R_y @ R_x
 
 
 # Coordinate transforms between REP-105 standard frames
@@ -83,21 +110,32 @@ R_BASE_TO_OPTICAL = np.array([
 R_OPTICAL_TO_BASE = R_BASE_TO_OPTICAL.T
 
 
-def transform_optical_to_base(pts_optical: np.ndarray, mounting_xyz: Tuple[float, float, float] = (0.20, 0.0, 0.20)) -> np.ndarray:
+def transform_optical_to_base(
+    pts_optical: np.ndarray,
+    mounting_xyz: Tuple[float, float, float] = (0.20, 0.0, 0.20),
+    mounting_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+) -> np.ndarray:
     """Transform (N, 3) 3D points from camera optical frame to robot base_link frame."""
     if len(pts_optical) == 0:
         return np.zeros((0, 3), dtype=np.float64)
-    # P_base = R_optical_to_base * P_opt + offset
-    pts_base = (R_OPTICAL_TO_BASE @ pts_optical.T).T + np.array(mounting_xyz)
+    R_mount = euler_rpy_to_rotation_matrix(*mounting_rpy)
+    R_opt_to_base = R_mount @ R_OPTICAL_TO_BASE
+    pts_base = (R_opt_to_base @ pts_optical.T).T + np.array(mounting_xyz)
     return pts_base
 
 
-def transform_base_to_optical(pts_base: np.ndarray, mounting_xyz: Tuple[float, float, float] = (0.20, 0.0, 0.20)) -> np.ndarray:
+def transform_base_to_optical(
+    pts_base: np.ndarray,
+    mounting_xyz: Tuple[float, float, float] = (0.20, 0.0, 0.20),
+    mounting_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+) -> np.ndarray:
     """Transform (N, 3) 3D points from robot base_link frame to camera optical frame."""
     if len(pts_base) == 0:
         return np.zeros((0, 3), dtype=np.float64)
+    R_mount = euler_rpy_to_rotation_matrix(*mounting_rpy)
+    R_base_to_opt = R_BASE_TO_OPTICAL @ R_mount.T
     pts_rel = pts_base - np.array(mounting_xyz)
-    pts_opt = (R_BASE_TO_OPTICAL @ pts_rel.T).T
+    pts_opt = (R_base_to_opt @ pts_rel.T).T
     return pts_opt
 
 
@@ -193,7 +231,11 @@ class SyntheticStereoArena:
             p_base = R_world_to_base @ p_rel_world
 
             # Base to left camera optical frame
-            p_opt = transform_base_to_optical(p_base.reshape(1, 3), config.mounting_offset_base_xyz)[0]
+            p_opt = transform_base_to_optical(
+                p_base.reshape(1, 3),
+                mounting_xyz=config.mounting_offset_base_xyz,
+                mounting_rpy=config.mounting_rpy_rad
+            )[0]
             Z_left = p_opt[2]
             X_left = p_opt[0]
             Y_left = p_opt[1]
@@ -411,7 +453,11 @@ class StereoDepthPipeline:
                 step = len(pts_opt) // max_points
                 pts_opt = pts_opt[::step][:max_points]
 
-            pts_base = transform_optical_to_base(pts_opt, self.config.mounting_offset_base_xyz)
+            pts_base = transform_optical_to_base(
+                pts_opt,
+                mounting_xyz=self.config.mounting_offset_base_xyz,
+                mounting_rpy=self.config.mounting_rpy_rad
+            )
         else:
             pts_opt = np.zeros((0, 3), dtype=np.float64)
             pts_base = np.zeros((0, 3), dtype=np.float64)
@@ -609,9 +655,12 @@ class StereoVisualOdometry:
         R_delta_cam = R_cam.T
         t_delta_cam = -R_delta_cam @ t_cam
 
-        # Transform to base_link:
-        t_delta_base = R_OPTICAL_TO_BASE @ t_delta_cam
-        R_delta_base = R_OPTICAL_TO_BASE @ R_delta_cam @ R_BASE_TO_OPTICAL
+        # Transform to base_link using calibrated mounting orientation:
+        R_mount = euler_rpy_to_rotation_matrix(*self.config.mounting_rpy_rad)
+        R_opt_to_base = R_mount @ R_OPTICAL_TO_BASE
+        R_base_to_opt = R_BASE_TO_OPTICAL @ R_mount.T
+        t_delta_base = R_opt_to_base @ t_delta_cam
+        R_delta_base = R_opt_to_base @ R_delta_cam @ R_base_to_opt
 
         # Extract planar displacements [dx, dy, dtheta]
         dx = float(t_delta_base[0])

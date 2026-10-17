@@ -226,3 +226,61 @@ def test_point_cloud_icp_honest_rejections():
     res_far = register_point_clouds_icp(pts_src, pts_tgt, max_correspondence_dist_m=0.50, force_cpu=True)
     assert not res_far.success
     assert res_far.fitness < 0.10
+
+
+def test_q_matrix_reprojection_sign_and_depth():
+    """
+    Verify that StereoCameraConfig.q_matrix produces positive physical depth
+    for positive disparities.
+    Z = f * B / d.
+    """
+    cfg = StereoCameraConfig(
+        fx=400.0,
+        fy=400.0,
+        cx=320.0,
+        cy=240.0,
+        baseline_m=0.10
+    )
+    Q = cfg.q_matrix
+
+    # Test disparity of 20.0 pixels at principal point (u=320, v=240)
+    disp = 20.0
+    vec_4d = np.array([320.0, 240.0, disp, 1.0])
+    reproj = Q @ vec_4d
+    X_hom, Y_hom, Z_hom, W_hom = reproj
+
+    assert W_hom > 0.0, f"Expected positive homogeneous scale W, got {W_hom}"
+    depth = Z_hom / W_hom
+    expected_depth = cfg.fx * cfg.baseline_m / disp  # 400 * 0.10 / 20 = 2.0m
+
+    assert math.isclose(depth, expected_depth, abs_tol=1e-6)
+    assert depth > 0.0, f"Depth must be positive for positive disparity, got {depth}"
+
+
+def test_mounting_rpy_transforms():
+    """
+    Verify transform_optical_to_base and transform_base_to_optical with
+    non-zero mounting roll, pitch, and yaw.
+    """
+    offset_xyz = (0.25, 0.05, 0.30)
+    pitch_down = math.radians(15.0)  # 15 degrees pitch down
+    yaw_left = math.radians(5.0)
+    rpy = (0.0, pitch_down, yaw_left)
+
+    pts_base = np.array([
+        [1.0, 0.0, 0.0],
+        [2.0, 0.5, -0.2],
+        [3.0, -1.0, 0.1]
+    ], dtype=np.float64)
+
+    # Transform base -> optical -> base (round trip)
+    pts_opt = transform_base_to_optical(pts_base, mounting_xyz=offset_xyz, mounting_rpy=rpy)
+    pts_recovered = transform_optical_to_base(pts_opt, mounting_xyz=offset_xyz, mounting_rpy=rpy)
+
+    np.testing.assert_allclose(pts_base, pts_recovered, atol=1e-8)
+
+    # Zero RPY backward-compatibility check
+    pts_opt_zero = transform_base_to_optical(pts_base, mounting_xyz=offset_xyz)
+    pts_rec_zero = transform_optical_to_base(pts_opt_zero, mounting_xyz=offset_xyz)
+    np.testing.assert_allclose(pts_base, pts_rec_zero, atol=1e-8)
+
