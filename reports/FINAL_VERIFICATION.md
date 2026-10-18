@@ -126,23 +126,23 @@ All 10 defects have been repaired in code, verified with targeted unit and adver
 
 ## 3. Verification Test Suite and Regression Results
 
-All 91 unit and regression tests pass cleanly on CPU:
+All 133 unit and regression tests pass cleanly on CPU:
 
 ```text
-tests/test_audit_verification.py ................................... 9 passed
-tests/test_core.py ................................................. 7 passed
-tests/test_dependencies_smoke.py ................................... 2 passed
-tests/test_gnss_recovery.py ........................................ 12 passed
-tests/test_p0_foundation.py ........................................ 9 passed
-tests/test_p1_sensors_fusion.py .................................... 7 passed
-tests/test_p2_range_sensors.py ..................................... 5 passed
-tests/test_realdata.py ............................................. 5 passed
-tests/test_refinement.py ........................................... 6 passed
-tests/test_ros2_mock.py ............................................ 4 passed
-tests/test_safe_stop.py ............................................ 7 passed
-tests/test_sensor_registry.py ...................................... 6 passed
-tests/test_stereo.py ............................................... 11 passed
-============================= 91 passed in 44.10s =============================
+tests/test_audit_verification.py .............................. 30 passed
+tests/test_core.py ............................................ 7 passed
+tests/test_dependencies_smoke.py .............................. 2 passed
+tests/test_gnss_recovery.py ................................... 13 passed
+tests/test_p0_foundation.py ................................... 9 passed
+tests/test_p1_sensors_fusion.py ............................... 7 passed
+tests/test_p2_range_sensors.py ................................ 5 passed
+tests/test_realdata.py ........................................ 5 passed
+tests/test_refinement.py ...................................... 6 passed
+tests/test_ros2_mock.py ....................................... 4 passed
+tests/test_safe_stop.py ....................................... 28 passed
+tests/test_sensor_registry.py ................................. 6 passed
+tests/test_stereo.py .......................................... 11 passed
+============================ 133 passed in 35.07s =============================
 ```
 
 ### Key Adversarial Tests Verified:
@@ -178,8 +178,8 @@ Executed on the 233-pose outdoor M2DGR `Anomaly` trajectory (46.21s, 7.16m path)
 
 ### 4.2 Map-Based Localization Benchmark (`scripts/run_map_benchmarks.py`)
 Evaluated on the synthetic volcanic testbed:
-- Fixed Particle Filter ($N=200$): Position RMSE = $0.347 \pm 0.002$ m, Update Time = 28.45 ms
-- Adaptive AMCL (KLD-sampling): Position RMSE = $0.347 \pm 0.002$ m, Update Time = 18.50 ms, Mean Particle Count = 102.6 particles (35.0% latency reduction)
+- Fixed Particle Filter ($N=200$): Position RMSE = $0.023 \pm 0.008$ m, Update Time = 15.47 ms
+- Adaptive AMCL (KLD-sampling): Position RMSE = $0.025 \pm 0.002$ m, Update Time = 9.71 ms, Mean Particle Count = 103.3 particles (37.2% latency reduction)
 
 ### 4.3 Multi-Scenario Monte Carlo Benchmark (`scripts/run_quick.py`)
 - E4 (Differential Slip): Robust EKF maintains 0.174 m RMSE vs 13.768 m for pure odometry.
@@ -208,6 +208,6 @@ All publication figures were regenerated directly from verified experiment outpu
 | **Algorithmic Integrity** | Passed | AMCL absolute per-beam likelihood tracking reliably recovers from kidnapping; safe-stop supervisor requires confirmed sensor standstill. |
 | **Standards Compliance** | Passed | Continuous REP-105 transform composition ($T_{\mathrm{map}}^{\mathrm{base}} = T_{\mathrm{map}}^{\mathrm{odom}} \cdot T_{\mathrm{odom}}^{\mathrm{base}}$) is satisfied at every epoch. |
 | **Experimental Honesty** | Passed | Negative results (gate lockout, floor texture loss, counterfactual safe stopping) are explicitly analyzed; zero fabricated fallbacks or unmeasured metrics remain. |
-| **Reproducibility** | Passed | 100 automated tests pass across 13 test suites in under 25 seconds on standard CPU hardware without external simulator or GPU requirements. |
+| **Reproducibility** | Passed | 133 automated tests pass across 13 test suites in ~35 seconds on standard CPU hardware without external simulator or GPU requirements. |
 
 **Verdict:** The codebase is robust, mathematically consistent, reproducible, and ready for scientific peer review and publication.

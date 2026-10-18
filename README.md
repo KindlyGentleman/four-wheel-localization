@@ -75,7 +75,7 @@ During the blackout, the robot navigates purely on dead reckoning and IMU integr
 ### Explaining Figure 3: Multi-Scenario Benchmarks and Adaptive AMCL
 
 - **(a) Multi-Scenario Monte Carlo Benchmark (10 Seeds x 6 Scenarios):** Quantitative evaluation comparing Wheel Odometry (B0), Bias-Aware EKF (B5), Manifold UKF (A4), and Robust Huber EKF (A5). Error bars show 95% confidence intervals. Odometry works well in nominal simulation (0.064 m) but collapses under slip (11.8 m) and outage (1.34 m). The robust estimator maintains sub-0.55 m tracking across all combined stress conditions.
-- **(b) Known-Map LiDAR Localization (Fixed PF vs Adaptive AMCL):** Partitioned evaluation of particle count and update latency. Fixed Particle Filter ($N=200$) requires 22.1 ms per update. Adaptive AMCL (KLD sampling) dynamically scales particle count based on Kullback-Leibler distance, reducing mean particle count by 38.5% (down to 123 particles) and cutting latency by 33.0% (to 14.8 ms per update) while matching the identical 0.3421 m localization accuracy.
+- **(b) Known-Map LiDAR Localization (Fixed PF vs Adaptive AMCL):** Partitioned evaluation of particle count and update latency. Fixed Particle Filter ($N=200$) requires 15.5 ms per update with 0.023 m RMSE. Adaptive AMCL (KLD sampling) dynamically scales particle count based on Kullback-Leibler distance, reducing mean particle count by 48.4% (down to 103 particles) and cutting latency by 37.2% (to 9.7 ms per update) with 0.025 m localization accuracy.
 - **(c) Outage Recovery Heading vs Position:** Position RMSE versus heading error across recovery configurations, illustrating how heading alignment errors during prolonged blackouts govern post-recovery position accuracy.
 
 ---
@@ -137,7 +137,7 @@ pip install -e .
 Run tests and experiments:
 
 ```bash
-# 1. Run all 91 unit and regression tests (~45s)
+# 1. Run all 133 unit and regression tests (~35s)
 python -m pytest tests/
 
 # 2. Run the hybrid benchmark and causal vision ablation (~12s)

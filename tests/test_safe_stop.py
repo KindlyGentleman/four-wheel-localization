@@ -373,3 +373,278 @@ def test_untrusted_gnss_cannot_authorize_restart():
     assert status.is_stopped is True
 
 
+def test_reject_nan_gnss_x():
+    """Verify that GNSS fix with NaN x-coordinate is rejected and cannot advance recovery."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([float("nan"), 5.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "nonfinite_coordinates"
+
+
+def test_reject_nan_gnss_y():
+    """Verify that GNSS fix with NaN y-coordinate is rejected and cannot advance recovery."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([5.0, float("nan")]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "nonfinite_coordinates"
+
+
+def test_reject_infinite_gnss_coordinates():
+    """Verify that infinite GNSS coordinates are rejected immediately."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([float("inf"), 0.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "nonfinite_coordinates"
+
+
+def test_reject_wrong_shape_gnss():
+    """Verify that 1D scalar or malformed arrays are rejected safely."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([1.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "invalid_shape"
+
+
+def test_reject_duplicate_gnss_timestamp():
+    """Verify that duplicate GNSS timestamps do not pass velocity validation."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 1
+    # Duplicate timestamp t=1.0
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([0.01, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "duplicate_or_nonmonotonic_timestamp"
+
+
+def test_reject_nonmonotonic_gnss_timestamp():
+    """Verify that out-of-order GNSS fixes are rejected."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    supervisor.update(t=2.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 1
+    # Backward timestamp t=1.5
+    status = supervisor.update(t=1.5, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([0.01, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.rejection_reason == "duplicate_or_nonmonotonic_timestamp"
+
+
+def test_invalid_gnss_does_not_refresh_trusted_age():
+    """Verify that a stream of NaN fixes does not conceal a prolonged GNSS outage."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    # Valid fix at t=0.0
+    supervisor.update(t=0.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.5, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.01, 0.01]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.last_valid_gnss_time == 0.0
+
+    # Corrupted fix at t=2.0 (outage of 2.0s should be detected)
+    status = supervisor.update(t=2.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.5, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.01, 0.01]),
+                               new_gnss_fix=np.array([float("nan"), 0.0]))
+    assert status.gnss_age_s == 2.0
+    assert supervisor.last_valid_gnss_time == 0.0
+    assert status.state == SafeStopState.BRAKING
+
+
+def test_invalid_gnss_does_not_increment_recovery_count():
+    """Verify that corrupted fixes cannot increment valid fix counters."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 1
+
+    # NaN fix arrives
+    supervisor.update(t=1.1, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([float("nan"), 0.0]))
+    assert supervisor.consecutive_valid_fixes == 0
+
+
+def test_nan_fix_sequence_cannot_trigger_resume():
+    """Verify that repeating NaN fixes during standstill cannot trigger resumption."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, min_consistent_fixes=3)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    for step in range(10):
+        t = 1.0 + step * 0.1
+        status = supervisor.update(t=t, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                                   v_measured=0.0, omega_measured=0.0,
+                                   pos_cov_diag=np.array([0.05, 0.05]),
+                                   new_gnss_fix=np.array([float("nan"), float("nan")]))
+        assert status.state == SafeStopState.STANDSTILL_HOLD
+        assert status.commanded_v == 0.0
+        assert supervisor.consecutive_valid_fixes == 0
+
+
+def test_persistent_biased_gnss_is_not_claimed_globally_verified():
+    """Verify that stationary fixes are flagged as relative consistency only, not absolute accuracy."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, min_consistent_fixes=3)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    for step in range(5):
+        t = 1.0 + step * 0.1
+        status = supervisor.update(t=t, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                                   v_measured=0.0, omega_measured=0.0,
+                                   pos_cov_diag=np.array([0.05, 0.05]),
+                                   new_gnss_fix=np.array([100.0, 100.0]))
+
+    assert status.is_relative_consistent is True
+    assert status.is_globally_verified is False
+
+
+def test_stale_velocity_blocks_standstill_confirmation():
+    """Verify that velocity older than max_velocity_age_s blocks standstill confirmation."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, max_velocity_age_s=0.5)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.BRAKING
+
+    status = supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=None,
+                               v_measured_t=0.0)
+    assert status.state == SafeStopState.BRAKING
+    assert status.is_stopped is False
+
+
+def test_stale_velocity_revokes_hold():
+    """Verify that stale velocity during hold revokes standstill state."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, max_velocity_age_s=0.5)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    status = supervisor.update(t=2.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=None,
+                               v_measured_t=1.0)
+    assert status.state == SafeStopState.BRAKING
+    assert status.is_stopped is False
+
+
+def test_stale_velocity_blocks_restart():
+    """Verify that stale velocity during recovery verification aborts to braking."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, min_consistent_fixes=3, max_velocity_age_s=0.5)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.VERIFYING_RECOVERY
+    supervisor.consecutive_valid_fixes = 3
+
+    status = supervisor.update(t=2.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.05, 0.05]),
+                               new_gnss_fix=np.array([0.0, 0.0]),
+                               v_measured_t=1.0)
+    assert status.state == SafeStopState.BRAKING
+    assert supervisor.consecutive_valid_fixes == 0
+
+
+def test_invalid_velocity_during_resuming():
+    """Verify that non-finite velocity during resumption immediately re-triggers braking."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.RESUMING
+
+    status = supervisor.update(t=3.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=float("nan"), omega_measured=0.0,
+                               pos_cov_diag=np.array([0.05, 0.05]),
+                               new_gnss_fix=np.array([0.0, 0.0]))
+    assert status.state == SafeStopState.BRAKING
+
+
+def test_trusted_age_not_refreshed_by_bad_fix():
+    """Verify that an untrusted jump does not advance the trusted fix timestamp."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.last_trusted_gnss_time == 1.0
+
+    supervisor.update(t=1.1, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([5.0, 0.0]))
+    assert supervisor.last_trusted_gnss_time == 1.0
+
+
+def test_stationary_constant_bias_failure_mode():
+    """Verify that stationary biased fixes verify relative consistency but note unanchored state."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, min_consistent_fixes=3)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    for step in range(3):
+        t = 1.0 + step * 0.1
+        status = supervisor.update(t=t, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                                   v_measured=0.0, omega_measured=0.0,
+                                   pos_cov_diag=np.array([0.05, 0.05]),
+                                   new_gnss_fix=np.array([50.0, 50.0]))
+    assert status.state == SafeStopState.VERIFYING_RECOVERY
+    assert "Relative Consistency Verified" in status.counterfactual_annotation
+    assert status.is_globally_verified is False
+
+
+def test_recovery_without_absolute_anchor_reports_uncertainty():
+    """Verify that recovery cannot authorize resumption if position uncertainty is unverified."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, max_pos_uncertainty_m=1.0, min_consistent_fixes=3)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    for step in range(3):
+        t = 1.0 + step * 0.1
+        status = supervisor.update(t=t, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                                   v_measured=0.0, omega_measured=0.0,
+                                   pos_cov_diag=np.array([2.5, 2.5]),
+                                   new_gnss_fix=np.array([0.0, 0.0]))
+    assert status.state == SafeStopState.VERIFYING_RECOVERY
+    assert status.commanded_v == 0.0
+
+

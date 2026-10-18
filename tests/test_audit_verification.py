@@ -440,5 +440,197 @@ def test_figure_parity_and_data_integrity():
     assert res == 0, "Figure parity and data integrity verification failed"
 
 
+def test_missing_scan_does_not_trigger_random_injection():
+    """Verify that completely missing scans (None/empty) do not trigger false kidnapping recovery."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    rng = np.random.RandomState(42)
+    amcl = AMCLAdaptiveParticleFilter2D(occupancy_map=v_map, min_particles=50, max_particles=200, rng=rng)
+    amcl.w_slow = 0.50
+    amcl.w_fast = 0.50
+    amcl.update_scan_adaptive(np.array([]), np.array([]))
+    assert amcl.w_slow == 0.50
+    assert amcl.w_fast == 0.50
+    assert amcl.p_random == 0.0
+
+
+def test_all_invalid_beams_skip_measurement_update():
+    """Verify that scans where all beams are out-of-range skip weight updates and keep last_scan_valid=False."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    initial_weights = pf.weights.copy()
+    angles = np.linspace(-math.pi/2, math.pi/2, 16)
+    ranges = np.ones(16) * 100.0 # Out of max range (12m)
+    lik = pf.compute_scan_weights(angles, ranges, max_range_m=12.0)
+    assert lik == 0.0
+    assert pf.last_scan_valid is False
+    np.testing.assert_allclose(pf.weights, initial_weights)
+
+
+def test_nan_lidar_ranges_are_ignored_or_rejected():
+    """Verify that NaN range values are filtered out without crashing."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    angles = np.array([0.0, 0.5])
+    ranges = np.array([float("nan"), float("nan")])
+    lik = pf.compute_scan_weights(angles, ranges)
+    assert lik == 0.0
+    assert pf.last_scan_valid is False
+
+
+def test_inf_lidar_ranges_are_handled():
+    """Verify that Inf range values are filtered out safely."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    angles = np.array([0.0, 0.5])
+    ranges = np.array([float("inf"), float("-inf")])
+    lik = pf.compute_scan_weights(angles, ranges)
+    assert lik == 0.0
+    assert pf.last_scan_valid is False
+
+
+def test_zero_beam_scan_keeps_valid_posterior():
+    """Verify that zero beams keep weights normalized and sum to 1.0."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.compute_scan_weights(np.array([]), np.array([]))
+    assert abs(np.sum(pf.weights) - 1.0) < 1e-12
+
+
+def test_no_scan_does_not_update_slow_fast_likelihood():
+    """Verify that dropout does not degrade w_fast or inflate p_random."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    amcl = AMCLAdaptiveParticleFilter2D(occupancy_map=v_map, min_particles=50, max_particles=200)
+    amcl.w_slow = 0.40
+    amcl.w_fast = 0.40
+    for _ in range(50):
+        amcl.update_scan_adaptive(np.array([]), np.array([]))
+    assert amcl.w_slow == 0.40
+    assert amcl.w_fast == 0.40
+    assert amcl.p_random == 0.0
+
+
+def test_valid_low_likelihood_triggers_recovery_when_appropriate():
+    """Verify that authentic contradictory scans decay w_fast and trigger recovery."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    rng = np.random.RandomState(42)
+    angles = np.linspace(-math.pi/2, math.pi/2, 16)
+    ranges = np.ones(16) * 0.5
+    amcl = AMCLAdaptiveParticleFilter2D(occupancy_map=v_map, min_particles=50, max_particles=200, rng=rng)
+    amcl.w_slow = 0.50
+    amcl.w_fast = 0.50
+    amcl.update_scan_adaptive(angles, ranges)
+    assert amcl.w_fast < amcl.w_slow
+    assert amcl.p_random > 0.05
+
+
+def test_recovery_after_long_scan_dropout():
+    """Verify that filter can localize immediately when valid scans resume after a long dropout."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    true_pose = np.array([2.0, 2.0, 0.0])
+    angles, ranges = v_map.simulate_lidar_scan(true_pose, num_beams=16)
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=200, initial_pose=true_pose)
+    for _ in range(20):
+        pf.predict(v_enc=0.1, omega_gyro=0.0, dt=0.1)
+    pf.update_scan(angles, ranges)
+    assert pf.last_scan_valid is True
+
+
+def test_prediction_only_trajectory_stays_current():
+    """Verify that pose estimate advances during motion prediction without scans."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100, initial_pose=np.array([0.0, 0.0, 0.0]))
+    pf.predict(v_enc=1.0, omega_gyro=0.0, dt=1.0, std_v=0.0, std_omega=0.0)
+    assert pf.estimated_pose[0] > 0.90
+
+
+def test_systematic_resampling_resets_effective_sample_size():
+    """Verify that systematic resampling explicitly resets n_eff to N."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.weights = np.zeros(100)
+    pf.weights[0] = 1.0
+    pf.n_eff = 1.0
+    pf.resample_systematic()
+    assert abs(pf.n_eff - 100.0) < 1e-6
+    np.testing.assert_allclose(pf.weights, np.ones(100) / 100.0)
+
+
+def test_resampling_estimate_matches_particle_population():
+    """Verify that after resampling, estimated_pose matches the resampled particle mean."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.particles[:50, 0] = 5.0
+    pf.particles[50:, 0] = 0.0
+    pf.weights[:50] = 1.0 / 50.0
+    pf.weights[50:] = 0.0
+    pf.resample_systematic()
+    assert abs(pf.estimated_pose[0] - 5.0) < 0.1
+
+
+def test_resampling_preserves_normalized_weights():
+    """Verify that weights sum to exactly 1.0 after resampling."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.resample_systematic()
+    assert abs(np.sum(pf.weights) - 1.0) < 1e-12
+
+
+def test_no_out_of_bounds_resampling_indices():
+    """Verify that resampling indices do not exceed bounds."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=200)
+    pf.resample_systematic()
+    assert pf.particles.shape == (200, 3)
+
+
+def test_resampling_with_strongly_degenerate_weights():
+    """Verify resampling when a single particle carries 1.0 weight."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=50)
+    pf.weights = np.zeros(50)
+    pf.weights[12] = 1.0
+    pf.particles[12] = [3.5, -2.1, 0.4]
+    pf.resample_systematic()
+    np.testing.assert_allclose(pf.particles[:, 0], 3.5)
+    np.testing.assert_allclose(pf.particles[:, 1], -2.1)
+    np.testing.assert_allclose(pf.particles[:, 2], 0.4)
+
+
+def test_resampling_with_uniform_weights():
+    """Verify that resampling with already uniform weights preserves particle spread."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.resample_systematic()
+    assert pf.n_eff == 100.0
+
+
+def test_heading_wrap_consistency_after_resampling():
+    """Verify that circular heading angles remain wrapped in [-pi, pi] after resampling."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100)
+    pf.particles[:, 2] = np.pi - 0.01
+    pf.resample_systematic()
+    assert np.all(pf.particles[:, 2] >= -np.pi)
+    assert np.all(pf.particles[:, 2] <= np.pi)
+    assert abs(pf.estimated_pose[2] - (np.pi - 0.01)) < 1e-4
+
+
+
 
 

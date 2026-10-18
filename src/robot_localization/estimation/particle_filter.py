@@ -239,6 +239,8 @@ class ParticleFilter2D:
         self.estimated_pose = p0.copy()
         self.estimated_cov = np.eye(3) * (initial_pos_std_m ** 2)
         self.n_eff = float(self.N)
+        self.last_scan_valid: bool = False
+        self.last_scan_num_valid_beams: int = 0
 
     def predict(
         self,
@@ -276,16 +278,33 @@ class ParticleFilter2D:
         Does NOT perform resampling.
         Returns average sample likelihood.
         """
-        # Filter valid beams (shorter than max_range and beyond min range)
-        valid = (ranges > 0.2) & (ranges < (max_range_m - 0.1))
-        if not np.any(valid):
-            # No valid observation beams; keep estimate synchronized with current particles
-            # and report zero observation likelihood without inventing high informativeness
+        if beam_angles_rel is None or ranges is None or len(ranges) == 0:
+            self.last_scan_valid = False
+            self.last_scan_num_valid_beams = 0
             self._compute_estimate()
             return 0.0
 
-        v_angles = beam_angles_rel[valid]
-        v_ranges = ranges[valid]
+        # Filter valid beams (finite, within sensor range bounds)
+        ranges_arr = np.asarray(ranges, dtype=float)
+        angles_arr = np.asarray(beam_angles_rel, dtype=float)
+        valid = (
+            np.isfinite(ranges_arr)
+            & np.isfinite(angles_arr)
+            & (ranges_arr > 0.2)
+            & (ranges_arr < (max_range_m - 0.1))
+        )
+        if not np.any(valid):
+            # No valid observation beams; keep estimate synchronized with current particles
+            # and report zero observation likelihood without corrupting posterior or recovery
+            self.last_scan_valid = False
+            self.last_scan_num_valid_beams = 0
+            self._compute_estimate()
+            return 0.0
+
+        self.last_scan_valid = True
+        v_angles = angles_arr[valid]
+        v_ranges = ranges_arr[valid]
+        self.last_scan_num_valid_beams = len(v_ranges)
         n_beams = len(v_ranges)
 
         # Compute log-likelihood for each particle
@@ -403,6 +422,8 @@ class ParticleFilter2D:
 
         self.particles = self.particles[indexes].copy()
         self.weights = np.ones(self.N) / float(self.N)
+        self.n_eff = float(self.N)
+        self._compute_estimate()
 
 
 class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
@@ -454,6 +475,10 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
         and preserving authentic posterior weights for KLD sampling.
         """
         avg_likelihood = self.compute_scan_weights(beam_angles_rel, ranges, max_range_m)
+
+        if not self.last_scan_valid:
+            # Missing or invalid scan: do not distort w_slow/w_fast and do not trigger false recovery injection
+            return 0.0
 
         # Update short and long term filter likelihood averages
         if self.w_slow == 0.0:

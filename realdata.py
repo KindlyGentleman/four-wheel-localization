@@ -929,6 +929,7 @@ def run_hybrid_experiment(
                 R_gnss = np.diag([0.05**2, 0.05**2])
                 gnss_fix_val = z_gnss
 
+                prev_recov_count = len(est.recovery_events) if hasattr(est, "recovery_events") else 0
                 if isinstance(est, RecoverableRobustEKF4D):
                     accepted, _ = est.update_gnss_recoverable(t, z_gnss, R_gnss)
                     if accepted:
@@ -948,6 +949,9 @@ def run_hybrid_experiment(
                     accepted_gnss += 1
                     accepted_gnss_step_indices.append(i)
 
+                if hasattr(est, "recovery_events") and len(est.recovery_events) > prev_recov_count:
+                    relocalization_indices.append(i)
+
         # Step 4: Capture Post-Update State
         if isinstance(est, (RecoverableRobustEKF4D, RobustEKF4D, BiasAwareEKF4D)):
             state_val = est.x[:3].copy()
@@ -964,11 +968,6 @@ def run_hybrid_experiment(
             cov_val = np.array([0.01, 0.01, 0.005]) * (rel_t + 1.0)
             odom_val = state_val.copy()
             m2o_val = np.zeros(2)
-
-        if len(est_poses) > 0:
-            jump_dist = float(np.hypot(state_val[0] - est_poses[-1][0], state_val[1] - est_poses[-1][1]))
-            if jump_dist > max(0.40, 1.5 * dt):
-                relocalization_indices.append(i)
 
         # Step 5: Safe-Stop Supervisor Evaluation (Counterfactual)
         sup_status = supervisor.update(

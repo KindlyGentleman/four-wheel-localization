@@ -73,7 +73,7 @@ def _compute_stereo_degradation_metrics():
 
     for label, deg_mode, use_clahe in modes:
         vo = StereoVisualOdometry(cam_cfg, max_features=250, min_inliers=6)
-        ratios, errs = [], []
+        ratios, valid_errs = [], []
         for idx, pose in enumerate(poses):
             img_l, img_r, _ = arena.render_stereo_pair(pose, cam_cfg)
             if deg_mode == "clean":
@@ -89,10 +89,13 @@ def _compute_stereo_degradation_metrics():
             if idx > 0:
                 ratio = res.inlier_ratio * 100.0
                 ratios.append(ratio)
-                errs.append(min(res.reprojection_rmse_px, 4.8) if res.num_inliers >= 6 else 4.8)
+                if res.is_valid and res.num_inliers >= 6 and np.isfinite(res.reprojection_rmse_px):
+                    valid_errs.append(res.reprojection_rmse_px)
         labels.append(label)
-        inlier_pcts.append(float(np.mean(ratios)))
-        reproj_errs.append(float(np.mean(errs)))
+        inlier_pcts.append(float(np.mean(ratios)) if ratios else 0.0)
+        # Undefined reprojection error for failed tracking conditions
+        mean_err = float(np.mean(valid_errs)) if len(valid_errs) > 0 else np.nan
+        reproj_errs.append(mean_err)
 
     return labels, inlier_pcts, reproj_errs
 
@@ -132,9 +135,9 @@ def generate_figure():
         ax_a.text(wx, wy + (0.07 if wy > 0 else -0.04), label, ha="center", va="center", fontsize=6.2, fontweight="bold", color="#334155")
 
     # Forward direction indicator
-    ax_a.annotate("", xy=(0.36, 0.0), xytext=(0.25, 0.0),
+    ax_a.annotate("", xy=(0.34, 0.0), xytext=(0.25, 0.0),
                   arrowprops=dict(arrowstyle="->", color="#1E293B", lw=1.4))
-    ax_a.text(0.38, 0.0, "+X_fwd", ha="left", va="center", fontsize=5.8, fontweight="bold", color="#1E293B")
+    ax_a.text(0.36, 0.0, "+X_fwd", ha="left", va="center", fontsize=5.8, fontweight="bold", color="#1E293B")
 
     ax_a.plot(0, 0, marker="o", markersize=4, color="#DC2626", zorder=5)
     ax_a.annotate("base_link (0,0)", xy=(0, 0), xytext=(-0.24, 0.06), fontsize=6.3, fontweight="bold",
@@ -145,15 +148,22 @@ def generate_figure():
                   arrowprops=dict(arrowstyle="->", color="#0284C7", lw=0.8))
 
     ax_a.plot(0.20, 0.0, marker="s", markersize=6, color=C_VO, zorder=5)
-    fov_pts = np.array([[0.20, 0.0], [0.55, 0.24], [0.55, -0.24]])
+    fov_pts = np.array([[0.20, 0.0], [0.55, 0.22], [0.55, -0.22]])
     fov_cone = patches.Polygon(fov_pts, closed=True, facecolor=C_VO, alpha=0.15, edgecolor=C_VO, linestyle="--", lw=0.8)
     ax_a.add_patch(fov_cone)
-    ax_a.text(0.40, 0.0, "Stereo FOV\n(B=0.10m)", ha="center", va="center", fontsize=5.6, color=C_VO)
+    ax_a.text(0.44, 0.12, "Stereo FOV\n(B=0.10m)", ha="center", va="center", fontsize=5.2, color=C_VO)
 
-    ax_a.plot([-0.18, 0.18], [0.33, 0.33], color="#64748B", lw=0.9)
-    ax_a.plot([-0.18, -0.18], [0.31, 0.35], color="#64748B", lw=0.9)
-    ax_a.plot([0.18, 0.18], [0.31, 0.35], color="#64748B", lw=0.9)
-    ax_a.text(0.0, 0.37, "Wheelbase L = 0.50m | Track B = 0.55m", ha="center", va="center", fontsize=5.8, color="#64748B")
+    # Wheelbase (along X)
+    ax_a.plot([-0.18, 0.18], [0.34, 0.34], color="#64748B", lw=0.9)
+    ax_a.plot([-0.18, -0.18], [0.32, 0.36], color="#64748B", lw=0.9)
+    ax_a.plot([0.18, 0.18], [0.32, 0.36], color="#64748B", lw=0.9)
+    ax_a.text(0.0, 0.38, "Wheelbase L = 0.50m (eff. 0.36m)", ha="center", va="center", fontsize=5.6, color="#64748B")
+
+    # Track width (along Y)
+    ax_a.plot([-0.30, -0.30], [-0.22, 0.22], color="#64748B", lw=0.9)
+    ax_a.plot([-0.32, -0.28], [-0.22, -0.22], color="#64748B", lw=0.9)
+    ax_a.plot([-0.32, -0.28], [0.22, 0.22], color="#64748B", lw=0.9)
+    ax_a.text(-0.35, 0.0, "Track\nB=0.55m", ha="right", va="center", fontsize=5.4, color="#64748B")
 
     # -------------------------------------------------------------------------
     # Panel (b): Sensor Availability & Health Timeline under Combined Stress
@@ -203,7 +213,18 @@ def generate_figure():
 
     ax_c.bar(x_idx - width / 2, inlier_pcts, width, label="Inlier Ratio [%]", color="#3B82F6", alpha=0.85)
     ax_c2 = ax_c.twinx()
-    ax_c2.bar(x_idx + width / 2, reproj_errors, width, label="Reproj RMSE [px]", color="#EF4444", alpha=0.85)
+
+    plot_errs = [err if np.isfinite(err) else 0.0 for err in reproj_errors]
+    bars_err = ax_c2.bar(x_idx + width / 2, plot_errs, width, label="Reproj RMSE [px]", color="#EF4444", alpha=0.85)
+
+    for i, err in enumerate(reproj_errors):
+        if not np.isfinite(err):
+            bars_err[i].set_height(0.0)
+            bars_err[i].set_edgecolor("#DC2626")
+            bars_err[i].set_hatch("//")
+            ax_c2.text(x_idx[i] + width / 2, 0.4, "FAILED\n(0 inliers)", ha="center", va="bottom", fontsize=5.0, color="#DC2626", fontweight="bold")
+        else:
+            ax_c2.text(x_idx[i] + width / 2, err + 0.1, f"{err:.2f}", ha="center", va="bottom", fontsize=5.2, color="#991B1B")
 
     ax_c.set_xticks(x_idx)
     ax_c.set_xticklabels(conditions, rotation=22, ha="right", fontsize=6.2)
@@ -348,24 +369,31 @@ def generate_figure():
     ax_f.set_title("(f) Empirical 95% Coverage by Regime", fontweight="bold", loc="left")
 
     quick_csv = PROJECT_ROOT / "results" / "quick_metrics.csv"
-    df_q = pd.read_csv(quick_csv) if quick_csv.exists() else pd.DataFrame()
+    if not quick_csv.exists():
+        raise FileNotFoundError(f"Required metrics file missing: {quick_csv}")
+    df_q = pd.read_csv(quick_csv)
 
-    def _q_cov(exp_name, b_name, default_val):
-        if not df_q.empty:
-            sub = df_q[(df_q["experiment"] == exp_name) & (df_q["baseline"] == b_name)]
-            if not sub.empty:
-                return float(sub["coverage_95"].iloc[0])
-        return default_val
+    def _q_cov(exp_name, b_name):
+        sub = df_q[(df_q["experiment"] == exp_name) & (df_q["baseline"] == b_name)]
+        if sub.empty:
+            raise ValueError(f"Missing coverage metric for experiment={exp_name}, baseline={b_name}")
+        val = float(sub["coverage_95"].iloc[0])
+        if val <= 1.0:
+            val *= 100.0
+        return val
 
-    def _abl_cov(cfg_name, default_val):
-        if not df_abl.empty and cfg_name in df_abl["config"].values:
-            return float(df_abl[df_abl["config"] == cfg_name]["coverage_95"].iloc[0])
-        return default_val
+    def _abl_cov(cfg_name):
+        if df_abl.empty or cfg_name not in df_abl["config"].values:
+            raise ValueError(f"Missing coverage metric in ablation summary for config={cfg_name}")
+        val = float(df_abl[df_abl["config"] == cfg_name]["coverage_95"].iloc[0])
+        if val <= 1.0:
+            val *= 100.0
+        return val
 
     regimes = ["Nominal\n(E1)", "Asym. Slip\n(E4)", "GNSS Outage\n(E8 Lockout)", "GNSS Outage\n(J3 Cov-Adj)"]
-    cov_b0 = [_q_cov("E1_nominal", "B0_wheel_odometry", 100.0), _q_cov("E4_differential_slip", "B0_wheel_odometry", 29.8), _q_cov("E8_gnss_outage_20s", "B0_wheel_odometry", 4.9), _q_cov("E8_gnss_outage_20s", "B0_wheel_odometry", 4.9)]
-    cov_b5 = [_q_cov("E1_nominal", "B5_bias_aware_ekf", 98.3), _q_cov("E4_differential_slip", "B5_bias_aware_ekf", 78.7), _q_cov("E8_gnss_outage_20s", "B5_bias_aware_ekf", 4.9), _abl_cov("J1_outage_R1_temporal_consistency", 7.3)]
-    cov_r = [_q_cov("E1_nominal", "A5_robust_ekf", 99.0), _q_cov("E4_differential_slip", "A5_robust_ekf", 78.7), _abl_cov("J0_outage_R0_strict_lockout", 7.3), _abl_cov("J3_outage_R3_covariance_growth", 33.1)]
+    cov_b0 = [_q_cov("E1_nominal", "B0_wheel_odometry"), _q_cov("E4_differential_slip", "B0_wheel_odometry"), _q_cov("E8_gnss_outage_20s", "B0_wheel_odometry"), _q_cov("E8_gnss_outage_20s", "B0_wheel_odometry")]
+    cov_b5 = [_q_cov("E1_nominal", "B5_bias_aware_ekf"), _q_cov("E4_differential_slip", "B5_bias_aware_ekf"), _q_cov("E8_gnss_outage_20s", "B5_bias_aware_ekf"), _abl_cov("J1_outage_R1_temporal_consistency")]
+    cov_r = [_q_cov("E1_nominal", "A5_robust_ekf"), _q_cov("E4_differential_slip", "A5_robust_ekf"), _abl_cov("J0_outage_R0_strict_lockout"), _abl_cov("J3_outage_R3_covariance_growth")]
 
     x_r = np.arange(len(regimes))
     w_bar = 0.25

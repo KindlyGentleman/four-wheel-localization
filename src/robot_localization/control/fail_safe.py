@@ -43,6 +43,7 @@ class SafeStopConfig:
     min_consistent_fixes: int = 3         # Require M >= 3 consecutive fixes
     standstill_gnss_speed_limit_m_s: float = 0.35 # Apparent speed limit during standstill
     stable_recovery_time_s: float = 2.0   # Hold resumed crawl for 2.0 s before full nominal
+    max_velocity_age_s: float = 0.5       # Maximum allowable age for velocity measurements
 
 
 @dataclass
@@ -58,6 +59,9 @@ class SafeStopStatus:
     pos_uncertainty_m: float
     consecutive_valid_fixes: int
     counterfactual_annotation: str = ""
+    rejection_reason: Optional[str] = None
+    is_relative_consistent: bool = False
+    is_globally_verified: bool = False
 
 
 class SafeStopSupervisor:
@@ -75,11 +79,35 @@ class SafeStopSupervisor:
         self.current_v = 0.0
         self.current_omega = 0.0
         self.last_gnss_time: Optional[float] = None
+        self.last_received_gnss_time: Optional[float] = None
+        self.last_valid_gnss_time: Optional[float] = None
+        self.last_trusted_gnss_time: Optional[float] = None
+        self.last_gnss_rejection_reason: Optional[str] = None
         self.last_fix_position: Optional[np.ndarray] = None
         self.consecutive_valid_fixes = 0
         self.fix_history: List[Tuple[float, np.ndarray]] = []
         self.time_in_state = 0.0
         self.resumed_at_t: Optional[float] = None
+
+    def _validate_gnss_input(self, t: float, fix: Any) -> Tuple[bool, str]:
+        """
+        Validate structure, finiteness, shape, and timestamp validity of GNSS fix.
+        """
+        if not np.isfinite(t):
+            return False, "nonfinite_timestamp"
+        if fix is None:
+            return False, "null_fix"
+        if not isinstance(fix, (np.ndarray, list, tuple)):
+            return False, "invalid_type"
+        try:
+            arr = np.asarray(fix, dtype=float)
+        except (ValueError, TypeError):
+            return False, "non_numeric"
+        if arr.ndim != 1 or arr.shape[0] < 2:
+            return False, "invalid_shape"
+        if not np.all(np.isfinite(arr[:2])):
+            return False, "nonfinite_coordinates"
+        return True, "valid"
 
     def update(
         self,
@@ -90,7 +118,8 @@ class SafeStopSupervisor:
         v_measured: float,
         omega_measured: float,
         pos_cov_diag: np.ndarray,
-        new_gnss_fix: Optional[np.ndarray] = None
+        new_gnss_fix: Optional[np.ndarray] = None,
+        v_measured_t: Optional[float] = None
     ) -> SafeStopStatus:
         """
         Update the safety supervisor state machine and compute safe command velocity.
@@ -104,15 +133,44 @@ class SafeStopSupervisor:
             omega_measured: Current measured/estimated turn rate (rad/s)
             pos_cov_diag: [P_xx, P_yy] position variance
             new_gnss_fix: [x, y] coordinates if a new GNSS fix arrived at time t
+            v_measured_t: Timestamp of the velocity measurement (for freshness checking)
         """
         dt = max(1e-4, dt)
         pos_std = float(np.sqrt(max(0.0, float(np.sum(pos_cov_diag[:2])))))
 
-        # Track GNSS arrival
-        if new_gnss_fix is not None:
-            self.last_gnss_time = t
+        # Evaluate motion measurement freshness and numerical validity
+        valid_motion_measurement = (
+            not np.isnan(v_measured)
+            and not np.isnan(omega_measured)
+            and not np.isinf(v_measured)
+            and not np.isinf(omega_measured)
+        )
+        if v_measured_t is not None:
+            if not np.isfinite(v_measured_t) or v_measured_t > (t + 1e-3) or (t - v_measured_t) > self.cfg.max_velocity_age_s:
+                valid_motion_measurement = False
 
-        gnss_age = (t - self.last_gnss_time) if self.last_gnss_time is not None else 999.0
+        # Validate incoming GNSS fix structure and freshness
+        gnss_input_valid = False
+        if new_gnss_fix is not None:
+            self.last_received_gnss_time = t
+            is_valid, reason = self._validate_gnss_input(t, new_gnss_fix)
+            if is_valid:
+                gnss_input_valid = True
+                self.last_valid_gnss_time = t
+                self.last_gnss_time = t
+                self.last_gnss_rejection_reason = None
+            else:
+                self.last_gnss_rejection_reason = reason
+                # Poisoning prevention: nonfinite or malformed fix immediately resets recovery verification
+                if self.state in (SafeStopState.STANDSTILL_HOLD, SafeStopState.VERIFYING_RECOVERY):
+                    self.consecutive_valid_fixes = 0
+                    self.fix_history.clear()
+                    if self.state == SafeStopState.VERIFYING_RECOVERY:
+                        self.state = SafeStopState.STANDSTILL_HOLD
+                        self.time_in_state = 0.0
+
+        # Calculate outage duration relative to last VALID GNSS fix
+        gnss_age = (t - self.last_valid_gnss_time) if self.last_valid_gnss_time is not None else 999.0
 
         # Check triggers for safety intervention
         uncertainty_breached = pos_std > self.cfg.max_pos_uncertainty_m
@@ -122,8 +180,8 @@ class SafeStopSupervisor:
         # State Machine Transitions
         # -------------------------------------------------------------
         if self.state == SafeStopState.NOMINAL:
-            self.current_v = v_measured
-            self.current_omega = omega_measured
+            self.current_v = v_measured if valid_motion_measurement else 0.0
+            self.current_omega = omega_measured if valid_motion_measurement else 0.0
 
             if outage_prolonged or uncertainty_breached:
                 self.state = SafeStopState.BRAKING
@@ -146,14 +204,7 @@ class SafeStopSupervisor:
             elif self.current_omega < 0.0:
                 self.current_omega = min(0.0, self.current_omega + dec_w)
 
-            # Check for confirmed standstill
             # Check for confirmed physical standstill from sensor measurements
-            valid_motion_measurement = (
-                not np.isnan(v_measured)
-                and not np.isnan(omega_measured)
-                and not np.isinf(v_measured)
-                and not np.isinf(omega_measured)
-            )
             at_standstill = (
                 valid_motion_measurement
                 and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
@@ -166,12 +217,6 @@ class SafeStopSupervisor:
                 self.time_in_state = 0.0
 
         elif self.state == SafeStopState.STANDSTILL_HOLD:
-            valid_motion_measurement = (
-                not np.isnan(v_measured)
-                and not np.isnan(omega_measured)
-                and not np.isinf(v_measured)
-                and not np.isinf(omega_measured)
-            )
             at_standstill = (
                 valid_motion_measurement
                 and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
@@ -192,10 +237,10 @@ class SafeStopSupervisor:
 
                 # Evaluate incoming GNSS fixes
                 if new_gnss_fix is not None:
-                    is_valid = self._validate_standstill_fix(t, new_gnss_fix)
-                    if is_valid:
+                    if gnss_input_valid and self._validate_standstill_fix(t, new_gnss_fix):
                         self.consecutive_valid_fixes += 1
-                        self.fix_history.append((t, new_gnss_fix.copy()))
+                        self.last_trusted_gnss_time = t
+                        self.fix_history.append((t, np.asarray(new_gnss_fix, dtype=float)[:2].copy()))
                         if self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes:
                             # Required M >= 3 consistent fixes verified!
                             self.state = SafeStopState.VERIFYING_RECOVERY
@@ -206,12 +251,6 @@ class SafeStopSupervisor:
                         self.fix_history.clear()
 
         elif self.state == SafeStopState.VERIFYING_RECOVERY:
-            valid_motion_measurement = (
-                not np.isnan(v_measured)
-                and not np.isnan(omega_measured)
-                and not np.isinf(v_measured)
-                and not np.isinf(omega_measured)
-            )
             at_standstill = (
                 valid_motion_measurement
                 and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
@@ -231,10 +270,10 @@ class SafeStopSupervisor:
                 self.current_omega = 0.0
 
                 if new_gnss_fix is not None:
-                    is_valid = self._validate_standstill_fix(t, new_gnss_fix)
-                    if is_valid:
+                    if gnss_input_valid and self._validate_standstill_fix(t, new_gnss_fix):
                         self.consecutive_valid_fixes += 1
-                        self.fix_history.append((t, new_gnss_fix.copy()))
+                        self.last_trusted_gnss_time = t
+                        self.fix_history.append((t, np.asarray(new_gnss_fix, dtype=float)[:2].copy()))
                     else:
                         # Drop back to standstill hold if fix fails consistency
                         self.state = SafeStopState.STANDSTILL_HOLD
@@ -251,41 +290,41 @@ class SafeStopSupervisor:
                     self.current_omega = omega_desired * 0.5
 
         elif self.state == SafeStopState.RESUMING:
-            # Controlled restart with limited speed and gentle acceleration
-            target_v = min(v_desired, self.cfg.max_resume_speed_m_s)
-            acc = self.cfg.max_resume_accel_m_s2 * dt
-
-            if self.current_v < target_v:
-                self.current_v = min(target_v, self.current_v + acc)
-            else:
-                self.current_v = target_v
-
-            self.current_omega = omega_desired * 0.5 # Muted turning during restart
-
-            # If tracking remains healthy for stable_recovery_time_s, return to nominal
-            if not outage_prolonged and not uncertainty_breached:
-                if self.time_in_state >= self.cfg.stable_recovery_time_s:
-                    self.state = SafeStopState.NOMINAL
-                    self.time_in_state = 0.0
-            else:
-                # Re-enter braking if problem reoccurs
+            # Check motion freshness and validity during resuming
+            if not valid_motion_measurement:
                 self.state = SafeStopState.BRAKING
                 self.time_in_state = 0.0
                 self.consecutive_valid_fixes = 0
                 self.fix_history.clear()
+            else:
+                # Controlled restart with limited speed and gentle acceleration
+                target_v = min(v_desired, self.cfg.max_resume_speed_m_s)
+                acc = self.cfg.max_resume_accel_m_s2 * dt
+
+                if self.current_v < target_v:
+                    self.current_v = min(target_v, self.current_v + acc)
+                else:
+                    self.current_v = target_v
+
+                self.current_omega = omega_desired * 0.5 # Muted turning during restart
+
+                # If tracking remains healthy for stable_recovery_time_s, return to nominal
+                if not outage_prolonged and not uncertainty_breached:
+                    if self.time_in_state >= self.cfg.stable_recovery_time_s:
+                        self.state = SafeStopState.NOMINAL
+                        self.time_in_state = 0.0
+                else:
+                    # Re-enter braking if problem reoccurs
+                    self.state = SafeStopState.BRAKING
+                    self.time_in_state = 0.0
+                    self.consecutive_valid_fixes = 0
+                    self.fix_history.clear()
 
         self.time_in_state += dt
 
         # Generate human-readable counterfactual annotation
-        # is_stopped is True ONLY when in a confirmed stopped state AND verified by sensor measurements
-        valid_motion = (
-            not np.isnan(v_measured)
-            and not np.isnan(omega_measured)
-            and not np.isinf(v_measured)
-            and not np.isinf(omega_measured)
-        )
         at_standstill_final = (
-            valid_motion
+            valid_motion_measurement
             and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
             and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
         )
@@ -294,6 +333,8 @@ class SafeStopSupervisor:
             and at_standstill_final
         )
         annotation = self._generate_annotation(is_stopped, gnss_age, pos_std)
+
+        is_rel_consistent = self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes
 
         return SafeStopStatus(
             timestamp=t,
@@ -306,28 +347,45 @@ class SafeStopSupervisor:
             gnss_age_s=gnss_age,
             pos_uncertainty_m=pos_std,
             consecutive_valid_fixes=self.consecutive_valid_fixes,
-            counterfactual_annotation=annotation
+            counterfactual_annotation=annotation,
+            rejection_reason=self.last_gnss_rejection_reason,
+            is_relative_consistent=is_rel_consistent,
+            is_globally_verified=False
         )
 
     def _validate_standstill_fix(self, t: float, fix: np.ndarray) -> bool:
         """
-        Verify that an incoming GNSS fix during standstill does not exhibit
-        implausible apparent motion exceeding the stationary velocity limit.
+        Verify that an incoming GNSS fix during standstill has finite coordinates,
+        strictly monotonic timestamps, and does not exhibit implausible apparent motion
+        exceeding the stationary velocity limit.
         """
+        is_struct_valid, reason = self._validate_gnss_input(t, fix)
+        if not is_struct_valid:
+            self.last_gnss_rejection_reason = reason
+            return False
+
+        arr = np.asarray(fix, dtype=float)[:2]
         if len(self.fix_history) == 0:
-            return True # First fix accepted into validation pipeline
+            self.last_gnss_rejection_reason = None
+            return True # First finite fix accepted into validation pipeline
 
         prev_t, prev_fix = self.fix_history[-1]
         dt = t - prev_t
         if dt <= 1e-4:
+            self.last_gnss_rejection_reason = "duplicate_or_nonmonotonic_timestamp"
             return False
 
-        dist = float(np.linalg.norm(fix[:2] - prev_fix[:2]))
+        dist = float(np.linalg.norm(arr - prev_fix[:2]))
+        if not np.isfinite(dist):
+            self.last_gnss_rejection_reason = "nonfinite_distance"
+            return False
+
         apparent_speed = dist / dt
-
-        if apparent_speed > self.cfg.standstill_gnss_speed_limit_m_s:
+        if not np.isfinite(apparent_speed) or apparent_speed > self.cfg.standstill_gnss_speed_limit_m_s:
+            self.last_gnss_rejection_reason = "speed_limit_exceeded"
             return False
 
+        self.last_gnss_rejection_reason = None
         return True
 
     def _generate_annotation(self, is_stopped: bool, gnss_age: float, pos_std: float) -> str:
@@ -336,9 +394,9 @@ class SafeStopSupervisor:
         elif self.state == SafeStopState.BRAKING:
             return f"Controlled Deceleration (GNSS Age: {gnss_age:.1f}s, Unc: {pos_std:.2f}m)"
         elif self.state == SafeStopState.STANDSTILL_HOLD:
-            return f"Standstill Hold ({self.consecutive_valid_fixes}/{self.cfg.min_consistent_fixes} Fixes Verified)"
+            return f"Standstill Hold ({self.consecutive_valid_fixes}/{self.cfg.min_consistent_fixes} Fixes Kinematically Consistent)"
         elif self.state == SafeStopState.VERIFYING_RECOVERY:
-            return f"Verifying Global Pose Re-Anchoring (Unc: {pos_std:.2f}m)"
+            return f"Verifying Global Pose Re-Anchoring (Unc: {pos_std:.2f}m, Relative Consistency Verified)"
         elif self.state == SafeStopState.RESUMING:
             return f"Conservative Restart (Speed capped at {self.cfg.max_resume_speed_m_s:.2f} m/s)"
         return ""
