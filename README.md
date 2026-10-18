@@ -1,6 +1,6 @@
-# Playing with Robot Localization
+# Four-Wheel Robot Localization: Fault-Tolerant State Estimation Under Wheel Slip, GNSS Denial, and Sensor Degradation
 
-A small, reproducible study on mobile robot state estimation when wheel odometry slips, GNSS cuts out for 20 seconds, and visual tracking degrades.
+A reproducible Python research study on mobile robot state estimation when wheel odometry slips, GNSS cuts out for 20 seconds, and visual tracking degrades.
 
 ---
 
@@ -117,6 +117,19 @@ Being honest about failure modes is more informative than claiming a universal s
 2. **Gate lockout is a real trap:** If an innovation gate is tuned too strictly ($\chi^2 \le 9.21$), it will permanently reject all post-blackout GNSS fixes after a 20-second drift. Without adaptive covariance or temporal re-anchoring, the filter never recovers.
 3. **Floor texture dependency:** The visual velocity module assumes the ground plane has visible features. Over featureless concrete or dark asphalt, inlier count collapses and vision falls back completely to wheel odometry.
 4. **Counterfactual safe-stop:** The included safe-stop controller issues emergency stop commands ($v_{\mathrm{cmd}} = 0$) within 2.0 seconds of covariance divergence. In real-world operation this stops the robot. In the hybrid benchmark, the reference trajectory continues unbraked because it replays fixed kinematic recordings.
+5. **Kidnapped-robot recovery limits:** AMCL with adaptive KLD sampling recovers reliably from 2 m displacements (80% success), but recovery drops to 40% at 5 m and 20% at 10 m over an 8-second window. Without uniform random injection, fixed particle filters achieve 0% recovery, remaining permanently trapped.
+
+---
+
+## Research Reports and Verification Artifacts
+
+The repository includes detailed engineering reports documenting adversarial tests, safety audits, and benchmark provenance:
+
+- `reports/FINAL_ISSUE_RESOLUTION_MATRIX.md`: Complete resolution matrix for all 14 audit findings (F01 to F14).
+- `reports/FINAL_VERIFICATION.md`: Comprehensive re-audit report and publication-readiness assessment.
+- `reports/GNSS_SAFETY_VALIDATION.md`: Defensive GNSS input validation, standstill checks, and velocity freshness verification.
+- `reports/AMCL_ADVERSARIAL_RECOVERY.md`: Empirical 45-trial kidnapped-robot recovery benchmark across displacement scales.
+- `reports/PARTICLE_BENCHMARK_REPRODUCTION.md`: Discrepancy reconciliation between live tracking accuracy (0.023m to 0.025m) and legacy notes.
 
 ---
 
@@ -149,11 +162,17 @@ python scripts/run_quick.py
 # 4. Run the complete 480-trial Monte Carlo benchmark (~3 min)
 python scripts/run_full.py
 
-# 5. Regenerate all IEEE publication figures and illustrations
+# 5. Run the AMCL kidnapped-robot recovery benchmark (~15s)
+python scripts/benchmark_amcl_kidnapping.py
+
+# 6. Regenerate all IEEE publication figures and illustrations
 python scripts/generate_figures.py
 python scripts/generate_figure_realdata.py
 python scripts/generate_resilience_figure.py
 python scripts/generate_figure_tradeoffs.py
+
+# 7. Run automated multi-point figure and data verification
+python scripts/verify_figures.py
 
 # Or use the unified reproduction CLI:
 python reproduce.py --quick
