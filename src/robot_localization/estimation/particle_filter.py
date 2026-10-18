@@ -262,6 +262,9 @@ class ParticleFilter2D:
         self.particles[:, 1] += v_eff * np.sin(th_mid) * dt
         self.particles[:, 2] = wrap_angle_array(th + w_eff * dt)
 
+        # Synchronize pose estimate and covariance with propagated particles
+        self._compute_estimate()
+
     def compute_scan_weights(
         self,
         beam_angles_rel: np.ndarray,
@@ -273,10 +276,13 @@ class ParticleFilter2D:
         Does NOT perform resampling.
         Returns average sample likelihood.
         """
-        # Filter valid beams (shorter than max_range)
+        # Filter valid beams (shorter than max_range and beyond min range)
         valid = (ranges > 0.2) & (ranges < (max_range_m - 0.1))
         if not np.any(valid):
-            return 1.0
+            # No valid observation beams; keep estimate synchronized with current particles
+            # and report zero observation likelihood without inventing high informativeness
+            self._compute_estimate()
+            return 0.0
 
         v_angles = beam_angles_rel[valid]
         v_ranges = ranges[valid]
@@ -374,6 +380,10 @@ class ParticleFilter2D:
         cov[0, 1] = np.sum(self.weights * dx * dy)
         cov[1, 0] = cov[0, 1]
         cov[1, 1] = np.sum(self.weights * (dy ** 2))
+        cov[0, 2] = np.sum(self.weights * dx * dth)
+        cov[2, 0] = cov[0, 2]
+        cov[1, 2] = np.sum(self.weights * dy * dth)
+        cov[2, 1] = cov[1, 2]
         cov[2, 2] = np.sum(self.weights * (dth ** 2))
         self.estimated_cov = cov
 
@@ -460,7 +470,8 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
             self.p_random = 0.0
 
         # Apply single KLD-sampling step if effective sample size drops below threshold
-        if self.n_eff < (self.N / 2.0):
+        # OR if augmented recovery indicates severe likelihood collapse (p_random > 0.05)
+        if self.n_eff < (self.N / 2.0) or self.p_random > 0.05:
             self._kld_resample_and_inject()
 
         return avg_likelihood
@@ -494,10 +505,10 @@ class AMCLAdaptiveParticleFilter2D(ParticleFilter2D):
 
             new_particles.append(p)
 
-            # Binning for KLD-sampling
-            bx = int(p[0] / self.bin_xy_m)
-            by = int(p[1] / self.bin_xy_m)
-            bth = int(p[2] / self.bin_th_rad)
+            # Binning for KLD-sampling using consistent mathematical floor discretization
+            bx = int(math.floor(p[0] / self.bin_xy_m))
+            by = int(math.floor(p[1] / self.bin_xy_m))
+            bth = int(math.floor(wrap_angle(p[2]) / self.bin_th_rad))
             bins_occupied.add((bx, by, bth))
 
             k = len(bins_occupied)

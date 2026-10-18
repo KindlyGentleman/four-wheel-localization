@@ -1,50 +1,91 @@
-# Task Tracking Ledger: Four-Wheel Robot Localization with EKF-Based Multi-Sensor Fusion
+# Engineering Remediation & Verification Task List
 
-## Phase P0: Foundation & Reference Reproduction
-- [x] P0.1 Audit upstream PythonRobotics EKF reference (`extended_kalman_filter.py`)
-- [x] P0.2 Implement exact standalone reference reproduction (`scripts/reproduce_reference.py`)
-- [x] P0.3 Document upstream audit findings in `reports/REFERENCE_AUDIT.md`
-- [x] P0.4 Implement core 4WD robot kinematic models (`robot_4wd.py`, `skid_steer.py`, `kinematics.py`)
-- [x] P0.5 Implement 4 independent wheel encoders with quantization, noise, and tick conversion (`encoder.py`)
-- [x] P0.6 Implement 4-wheel dead-reckoning odometry with Jacobian-based covariance propagation (`dead_reckoning.py`)
-- [x] P0.7 Implement core 3-state EKF with numerical Jacobian finite-difference validation (`ekf.py`)
-- [x] P0.8 Unit test suite for Phase P0 components (`tests/test_p0_foundation.py`)
+## Active Workspace & Branch
+- **Working Directory:** `d:\03_Proyek\Kalman_Filter`
+- **Branch:** `reaudit-figure-redesign`
+- **Baseline Commit SHA:** `fda5d09dce97ae438a75b968680155d56dd49dc4`
+- **Audit Date:** 2026-10-18
 
+---
 
-## Phase P1: Multi-Sensor Simulation & Fusion Core
-- [x] P1.1 Implement GNSS sensor model with antenna lever-arm, dropout, and drift (`gnss.py`)
-- [x] P1.2 Implement CMPS12 compass and gyro profile with angle wrapping and calibration states (`cmps12.py`)
-- [x] P1.3 Implement MPU-9250 6-DOF IMU profile with gyro bias random-walk (`mpu9250.py`)
-- [x] P1.4 Implement 4-state bias-aware EKF estimating $[p_x, p_y, \theta, b_g]^T$ (`bias_aware_ekf.py`)
-- [x] P1.5 Implement timestamp-driven asynchronous event scheduler (`scheduler.py`, `robot_simulator.py`)
-- [x] P1.6 Implement baselines B0 through B5 (`estimation/`, `simulation/scenarios.py`)
-- [x] P1.7 Implement benchmark evaluation framework & metrics (RMSE, MAE, NEES, NIS) (`metrics.py`, `monte_carlo.py`)
-- [x] P1.8 Run experiments E1-E9 (nominal, asymmetric radius, slip, gyro bias, compass disturbance, GNSS dropouts/outages)
-- [x] P1.9 Unit test suite for Phase P1 components (`tests/test_p1_sensors_fusion.py`)
+## Phases and Progress
 
-## Phase P2: Optional Range-Assisted Localization & Slip Adaptation
-- [x] P2.1 Implement 2D known-landmark LiDAR ray-casting observation model and Jacobians (`lidar.py`)
-- [x] P2.2 Implement 3-transducer ultrasonic known-wall observation model (`ultrasonic.py`)
-- [x] P2.3 Implement baseline B6 (mapped range assistance during GNSS denial)
-- [x] P2.4 Implement baseline B7 (slip-aware adaptive process covariance)
-- [x] P2.5 Run experiments E10, E11, E12 (GNSS denial with range sensors, combined failures)
-- [x] P2.6 Unit test suite for Phase P2 components (`tests/test_p2_range_sensors.py`)
+- [x] **Phase 0 - Baseline Inspection & Audit Inventory Correction**
+  - Confirmed Git HEAD SHA: `fda5d09dce97ae438a75b968680155d56dd49dc4`.
+  - Discrepancy resolved: Test suite consists of 91 tests across 13 test files (`test_gnss_recovery.py` has 13 tests, not 12; total test files is 13, not 15).
+  - Authored `reports/CURRENT_BASELINE_AUDIT.md`.
+  - Created `reports/REMEDIATION_TRACKER.md`.
 
+- [x] **Phase 1 - Safety Supervisor: Continuous Standstill Verification**
+  - Inspected `src/robot_localization/control/fail_safe.py`.
+  - Implemented continuous velocity re-verification in `STANDSTILL_HOLD` and `VERIFYING_RECOVERY`.
+  - Added velocity freshness and validity checks. Revoked hold when motion is detected, resetting recovery history.
+  - Implemented 4 adversarial unit tests in `tests/test_safe_stop.py`. All 11 tests pass.
 
-## Phase P3: Visualization, Demonstration Video & Documentation
-- [x] P3.1 Configure IEEE publication styling with scienceplots / standalone fallback (`ieee_style.py`)
-- [x] P3.2 Generate IEEE figures F01-F12 programmatically from saved simulation data (`figures.py`, `generate_figures.py`)
-- [x] P3.3 Generate programmatic vector illustrations I1-I6 (`illustrations.py`)
-- [x] P3.4 Build multi-panel 30-60s animation dashboard and render MP4 video (`animation.py`, `render_video.py`)
-- [x] P3.5 Write research reports:
-  - [x] `reports/REFERENCE_AUDIT.md`
-  - [x] `reports/MODEL_VALIDATION.md`
-  - [x] `reports/SENSOR_ASSUMPTIONS.md`
-  - [x] `reports/EXPERIMENTAL_PROTOCOL.md`
-  - [x] `reports/RESULTS.md`
-  - [x] `reports/STATISTICAL_VALIDATION.md`
-  - [x] `reports/NOVELTY_AND_LIMITATIONS.md`
-  - [x] `reports/REPRODUCIBILITY.md`
-  - [x] `reports/MINI_PAPER.md`
-- [x] P3.6 Compile final claim ledger and verification audit (`reports/CLAIM_LEDGER.md`)
+- [x] **Phase 2 - Particle Filter: Missing or Invalid Scan Handling**
+  - Inspected `src/robot_localization/estimation/particle_filter.py`.
+  - Ensured prediction updates `estimated_pose` and `covariance` even when no valid LiDAR beams are present.
+  - Added regression test `test_particle_filter_predict_updates_estimate_without_scans` in `tests/test_audit_verification.py`.
 
+- [x] **Phase 3 - AMCL: Kidnapped-Robot Recovery and KLD Correctness**
+  - Corrected AMCL recovery injection: added `p_random > 0.05` trigger to bypass starvation when $N_{\text{eff}} \ge N/2$.
+  - Corrected KLD binning spatial discretization with `math.floor` across Cartesian origin.
+  - Computed full 3-DOF sample covariance matrix ($\mathbf{P}_{x\theta}, \mathbf{P}_{y\theta}$) with wrapped heading residuals.
+  - Implemented unit tests in `tests/test_audit_verification.py`.
+
+- [x] **Phase 4 - GNSS Recovery Integrity and Metric Semantics**
+  - Audited drift reachability envelope and recovery thresholds.
+  - Harmonized threshold semantics in `metrics.py` and `realdata.py`.
+  - Enforced timestamp boundary checks to prevent extrapolation clamping.
+  - Logged evaluated and invalid recovery events explicitly.
+
+- [x] **Phase 5 - Covariance Consistency and Statistical Validity**
+  - Re-ran Monte Carlo benchmark across all 6 scenarios in `scripts/run_quick.py`.
+  - Verified and documented undercoverage under severe wheel slip ($10.6\%$ to $29.8\%$) as an unvarnished physical reality.
+  - Preserved authentic baseline behavior without artificial covariance inflation.
+
+- [x] **Phase 6 - Visual Odometry & Terminology Audit**
+  - Audited OpenCV Lucas-Kanade optical flow tracking in `realdata.py`.
+  - Disclosed that visual tracking is processed as decoupled frame-to-frame odometry and visual condition monitoring rather than a fused Kalman update.
+  - Added caption disclosures for optical flow vector scaling (3.5x).
+
+- [x] **Phase 7 - Comprehensive Figure Readability Audit**
+  - Conducted 12-criterion readability audit in `reports/FIGURE_READABILITY_AUDIT.md`.
+  - Scored `figure_main`, `figure_realdata`, and `figure_tradeoffs` across contrast, typography, marker collision, and scale.
+
+- [x] **Phase 8 - Redesign `figure_main`**
+  - Redesigned `scripts/generate_resilience_figure.py`.
+  - Improved rover schematic track layout and spacing.
+  - Clarified discrete 1 Hz GNSS fix markers in sensor timeline.
+
+- [x] **Phase 9 - Redesign `figure_realdata`**
+  - Redesigned `scripts/generate_figure_realdata.py`.
+  - Replaced hardcoded safe-stop intervals with dynamic supervisor state trace (`sup_states_R4_recoverable_temporal`).
+  - Removed synthetic fallback re-anchoring marker.
+  - Increased KLT flow vector visibility with high-contrast arrows.
+  - Decoupled Panel (e) into stacked subplots (Inlier ratio vs Disconnected/Connected RMSE).
+
+- [x] **Phase 10 - Redesign `figure_tradeoffs`**
+  - Redesigned `scripts/generate_figure_tradeoffs.py`.
+  - Synchronized benchmark latencies directly from `map_benchmark_summary.csv`.
+  - Handled asymmetric 95% confidence intervals (`yerr=[low_errs, high_errs]`).
+  - Split J0-J4 recovery comparison into distinct position and heading RMSE subpanels.
+
+- [x] **Phase 11 - Export and Format Parity Verification**
+  - Implemented automated visual quality and integrity validation script `scripts/verify_figures.py`.
+  - Guaranteed format parity (.png, .pdf, .svg) across `assets/`, `figures/`, and `four-wheel-localization/assets/`.
+  - Integrated into pytest in `tests/test_audit_verification.py`.
+
+- [x] **Phase 12 - Recheck Benchmarks and Update Numbers**
+  - Re-executed `realdata.py`, `scripts/run_map_benchmarks.py`, and `scripts/run_quick.py`.
+  - Re-exported all figure assets.
+
+- [x] **Phase 13 - Documentation and Scientific Claim Repair**
+  - Authored `reports/SAFETY_AND_RECOVERY_AUDIT.md` and `reports/PARTICLE_FILTER_VALIDATION.md`.
+  - Updated `reports/REMEDIATION_TRACKER.md` and `reports/FINAL_VERIFICATION.md`.
+
+- [x] **Phase 14 - Independent Red-Team Verification**
+  - Executed 20-point adversarial challenge matrix.
+
+- [x] **Phase 15 - Final Acceptance & Publication Readiness Verdict**
+  - Delivered final acceptance matrix and publication readiness verdict.

@@ -1196,7 +1196,8 @@ def run_full_realdata_suite(
         **{f"cov_{k}": v.cov_diags for k, v in trial_results.items()},
         **{f"cmd_v_{k}": np.array(v.commanded_vs, dtype=float) for k, v in trial_results.items()},
         **{f"stopped_{k}": np.array(v.is_stopped_flags, dtype=bool) for k, v in trial_results.items()},
-        **{f"reloc_idx_{k}": np.array(v.relocalization_indices, dtype=int) for k, v in trial_results.items()}
+        **{f"reloc_idx_{k}": np.array(v.relocalization_indices, dtype=int) for k, v in trial_results.items()},
+        **{f"sup_states_{k}": np.array([s[1] for s in v.supervisor_states]) for k, v in trial_results.items()}
     )
     print(f"Saved numerical traces to: {traces_npz}")
 

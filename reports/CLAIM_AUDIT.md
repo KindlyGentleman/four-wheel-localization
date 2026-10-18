@@ -17,7 +17,7 @@ Verdicts:
 ### Claim 1: Authentic M2DGR-plus Multisensor Replay
 - **Original Claim:** "The benchmark performs authentic multi-sensor replay of outdoor robot data from the M2DGR dataset."
 - **Source Files:** `realdata.py`, `data/anomaly.txt`, `data/m2dgr_anomaly.bag`.
-- **Pre-Audit Verdict:** **FAIL** (Severity: **P0 — Critical**).
+- **Pre-Audit Verdict:** **FAIL** (Severity: **P0  -  Critical**).
 - **Audit Findings:** The repository only consumes a 2D pose text file (`anomaly.txt`). All sensor channels (encoders, IMU, GNSS, floor camera) are synthetically generated from this path using kinematic models. The ROS bag is synthetically created via `create_sample_bag()`.
 - **Post-Audit Remediation:** The user explicitly authorized: *"you dont have to use the MSD2G data, just create a simulation its okay"*. All documentation, manifests, and figure captions have been rewritten to transparently declare a **Hybrid Kinematic Benchmark and Controlled Simulation**.
 - **Post-Audit Verdict:** **PASS** (Reclassified and accurately stated).
@@ -46,7 +46,7 @@ Verdicts:
 ### Claim 4: Global Re-initialization (R7) Provides Robust Recovery
 - **Original Claim:** "Strategy R7 resets filter state to newly restored GNSS observations without divergence."
 - **Source Files:** `src/robot_localization/estimation/gnss_recovery.py`.
-- **Pre-Audit Verdict:** **FAIL** (Severity: **P0 — Critical**).
+- **Pre-Audit Verdict:** **FAIL** (Severity: **P0  -  Critical**).
 - **Audit Findings:** In the pre-audit codebase, `R4_GLOBAL_REINITIALIZATION` executed `self.P = np.eye(4) * 1.0`. This uniform reset destroyed the correlation structure between position and heading and left heading unconstrained, causing the filter to diverge to **$15.325$ m RMSE**.
 - **Post-Audit Remediation:** Fixed covariance re-initialization in `gnss_recovery.py` to preserve positive-definite block structure ($\sigma_{\mathrm{pos}}^2 = 0.5^2$, $\sigma_\theta^2 = 0.1^2$, $\sigma_b^2 = 0.01^2$). Post-audit RMSE dropped to **$1.094$ m**, achieving stable convergence.
 - **Post-Audit Verdict:** **PASS** (Fixed and verified).
@@ -56,7 +56,7 @@ Verdicts:
 ### Claim 5: Visual Feature Tracking Contributes to Localization Accuracy
 - **Original Claim:** "Visual tracking reduces localization drift and degrades gracefully under severe lighting and blur."
 - **Source Files:** `realdata.py`, `src/robot_localization/sensors/stereo.py`.
-- **Pre-Audit Verdict:** **FAIL** (Severity: **P1 — High**).
+- **Pre-Audit Verdict:** **FAIL** (Severity: **P1  -  High**).
 - **Audit Findings:** In the original `run_hybrid_experiment()`, visual tracking metrics (inliers, keypoints) were computed purely as a diagnostic sidecar. Visual velocities were never passed into the EKF update equations. Therefore, claiming that camera degradation affected localization accuracy was scientifically unfounded.
 - **Post-Audit Remediation:** Implemented formal **Causal Ablation Modes (A, B, C, D)**:
   - Mode A (Disabled) $\equiv$ Mode B (Disconnected): both yield exactly $1.0939$ m RMSE.
@@ -69,7 +69,7 @@ Verdicts:
 ### Claim 6: Complete 6-Scenario Monte Carlo Benchmark
 - **Original Claim:** "The framework validates estimation robustness across 6 distinct stress scenarios with 10 Monte Carlo trials each."
 - **Source Files:** `scripts/run_full.py`, `scripts/run_ablations.py`.
-- **Pre-Audit Verdict:** **PARTIAL** (Severity: **P1 — High**).
+- **Pre-Audit Verdict:** **PARTIAL** (Severity: **P1  -  High**).
 - **Audit Findings:** The pre-audit script only iterated over 4 scenarios (`Nominal_Traction`, `Asymmetric_Wheel_Slip`, `GNSS_Outage_20s`, `Combined_Stress`). `Compass_Disturbance` and `GNSS_Multipath` were omitted from the runner script, leaving their claims unbacked by statistical data.
 - **Post-Audit Remediation:** Added both missing scenarios to `run_full.py` and `run_ablations.py`. Re-executed the complete 480-trial Monte Carlo benchmark ($6 \text{ scenarios} \times 8 \text{ baselines} \times 10 \text{ seeds}$).
 - **Post-Audit Verdict:** **PASS** (All 6 scenarios verified with 95% confidence intervals).
@@ -95,7 +95,7 @@ Verdicts:
 ### Claim 9: Safe-Stop Controller Actively Halts the Robot upon Failure
 - **Original Claim:** "The safe-stop controller halts the vehicle within 2.0 s of severe sensor failure."
 - **Source Files:** `src/robot_localization/control/safe_stop.py`, `realdata.py`.
-- **Audit Findings:** **PARTIAL** (Severity: **P2 — Medium**).
+- **Audit Findings:** **PARTIAL** (Severity: **P2  -  Medium**).
 - **Audit Findings:** The software controller correctly issues a zero command velocity ($v_{\mathrm{cmd}} = 0$) upon detecting covariance divergence. However, in `realdata.py`, the reference rover trajectory continues along its predetermined path because it is an open-loop playback of recorded kinematics.
 - **Post-Audit Remediation:** Clarified in all figures and documentation that the safe-stop controller is evaluated **counterfactually** against the uninterrupted reference path.
 - **Post-Audit Verdict:** **PASS** (Explicitly labeled as counterfactual).

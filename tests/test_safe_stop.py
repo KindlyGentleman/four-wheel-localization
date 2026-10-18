@@ -287,3 +287,89 @@ def test_supervisor_requires_measured_standstill_before_standstill_hold():
     assert status_stopped.state == SafeStopState.STANDSTILL_HOLD
     assert status_stopped.is_stopped is True
 
+
+def test_hold_revoked_when_motion_resumes():
+    """Verify that if external motion resumes during STANDSTILL_HOLD, hold is revoked immediately."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+
+    # Force supervisor to STANDSTILL_HOLD
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+    supervisor.consecutive_valid_fixes = 2
+
+    # Provide motion measurement above standstill threshold (e.g. sliding on slope)
+    status = supervisor.update(
+        t=5.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=0.12, omega_measured=0.0,
+        pos_cov_diag=np.array([0.5, 0.5]),
+        new_gnss_fix=None
+    )
+
+    assert status.state == SafeStopState.BRAKING
+    assert status.is_stopped is False
+    assert supervisor.consecutive_valid_fixes == 0
+
+
+def test_verifying_recovery_rechecks_standstill():
+    """Verify that motion resumption during VERIFYING_RECOVERY aborts recovery."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+
+    # Force supervisor to VERIFYING_RECOVERY
+    supervisor.state = SafeStopState.VERIFYING_RECOVERY
+    supervisor.consecutive_valid_fixes = 3
+
+    # Provide angular motion measurement (e.g. yaw spin while holding)
+    status = supervisor.update(
+        t=10.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=0.005, omega_measured=0.15,
+        pos_cov_diag=np.array([0.1, 0.1]),
+        new_gnss_fix=np.array([0.0, 0.0])
+    )
+
+    assert status.state == SafeStopState.BRAKING
+    assert status.is_stopped is False
+    assert supervisor.consecutive_valid_fixes == 0
+
+
+def test_stale_or_invalid_velocity_cannot_confirm_stop():
+    """Verify that NaN or infinite velocity inputs cannot be used to confirm standstill."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.BRAKING
+
+    status = supervisor.update(
+        t=3.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+        v_measured=float("nan"), omega_measured=0.0,
+        pos_cov_diag=np.array([0.5, 0.5]),
+        new_gnss_fix=None
+    )
+
+    assert status.state == SafeStopState.BRAKING
+    assert status.is_stopped is False
+
+
+def test_untrusted_gnss_cannot_authorize_restart():
+    """Verify that inconsistent GNSS fixes arriving at standstill reset validation count and block restart."""
+    cfg = SafeStopConfig(max_outage_time_s=1.0, standstill_gnss_speed_limit_m_s=0.35)
+    supervisor = SafeStopSupervisor(cfg)
+    supervisor.state = SafeStopState.STANDSTILL_HOLD
+
+    # Feed initial fix
+    supervisor.update(t=1.0, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                      v_measured=0.0, omega_measured=0.0,
+                      pos_cov_diag=np.array([0.1, 0.1]),
+                      new_gnss_fix=np.array([0.0, 0.0]))
+    assert supervisor.consecutive_valid_fixes == 1
+
+    # Feed erratic fix jumping 2.0m in 0.1s (apparent speed 20 m/s > 0.35 m/s)
+    status = supervisor.update(t=1.1, dt=0.1, v_desired=0.5, omega_desired=0.0,
+                               v_measured=0.0, omega_measured=0.0,
+                               pos_cov_diag=np.array([0.1, 0.1]),
+                               new_gnss_fix=np.array([2.0, 0.0]))
+
+    assert supervisor.consecutive_valid_fixes == 0
+    assert status.state == SafeStopState.STANDSTILL_HOLD
+    assert status.is_stopped is True
+
+

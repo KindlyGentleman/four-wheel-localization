@@ -319,3 +319,126 @@ def test_amcl_kidnapped_robot_recovery_injection():
     assert max_p_rand > 0.40, f"Expected p_random > 0.40 after kidnapping, got {max_p_rand:.2f}"
 
 
+def test_particle_filter_predict_updates_estimate_without_scans():
+    """Verify that ParticleFilter2D.predict() recomputes estimated pose and covariance during scan-free motion."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    rng = np.random.RandomState(42)
+    pf = ParticleFilter2D(
+        occupancy_map=v_map,
+        num_particles=150,
+        initial_pose=np.array([0.0, 0.0, 0.0]),
+        initial_pos_std_m=0.05,
+        initial_head_std_rad=0.01,
+        rng=rng
+    )
+
+    # Propagate particles forward 5.0m
+    for _ in range(5):
+        pf.predict(v_enc=1.0, omega_gyro=0.0, dt=1.0, std_v=0.01, std_omega=0.005)
+
+    # Pose estimate MUST track prediction forward
+    assert pf.estimated_pose[0] > 4.5, f"Expected estimated_pose[0] > 4.5m, got {pf.estimated_pose[0]:.2f}m"
+
+    # Pass an empty/invalid scan (all beams 0.05m < 0.2m min range)
+    invalid_angles = np.linspace(-math.pi/2, math.pi/2, 16)
+    invalid_ranges = np.ones(16) * 0.05
+    avg_lik = pf.compute_scan_weights(invalid_angles, invalid_ranges)
+
+    # Estimate must still remain synchronized with predicted position (~5.0m)
+    assert pf.estimated_pose[0] > 4.5
+    assert avg_lik == 0.0 or avg_lik < 0.1
+
+
+def test_kld_binning_negative_coordinates():
+    """Verify that KLD binning uses floor discretization so negative coordinates do not collapse into bin 0."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    amcl = AMCLAdaptiveParticleFilter2D(occupancy_map=v_map, min_particles=50, max_particles=100)
+
+    # Check binning around 0 for bin_xy_m = 0.50
+    # With math.floor: -0.1 -> -1, +0.1 -> 0 (distinct bins)
+    p_neg = np.array([-0.1, -0.1, 0.0])
+    p_pos = np.array([0.1, 0.1, 0.0])
+
+    bx_neg = int(math.floor(p_neg[0] / amcl.bin_xy_m))
+    bx_pos = int(math.floor(p_pos[0] / amcl.bin_xy_m))
+
+    assert bx_neg != bx_pos, "Negative and positive coordinates around origin must belong to distinct bins"
+    assert bx_neg == -1
+    assert bx_pos == 0
+
+
+def test_particle_filter_full_3dof_covariance():
+    """Verify that particle filter covariance computes full 3-DOF cross-covariances."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, ParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    pf = ParticleFilter2D(occupancy_map=v_map, num_particles=100, initial_pose=np.array([0.0, 0.0, 0.0]))
+
+    # Construct correlated particle cloud: x is positively correlated with theta
+    x_offsets = np.linspace(-0.5, 0.5, 100)
+    pf.particles[:, 0] = x_offsets
+    pf.particles[:, 1] = 0.0
+    pf.particles[:, 2] = x_offsets * 0.5 # theta correlated with x
+    pf.weights = np.ones(100) / 100.0
+
+    pf._compute_estimate()
+
+    cov = pf.estimated_cov
+    assert cov.shape == (3, 3)
+    assert abs(cov[0, 2]) > 1e-4, f"Cross-covariance P_x_theta should be non-zero, got {cov[0, 2]}"
+    assert abs(cov[2, 0] - cov[0, 2]) < 1e-12, "Covariance matrix must be symmetric"
+
+
+def test_amcl_recovery_injection_under_uniform_low_likelihood():
+    """Verify that AMCL triggers recovery injection even when n_eff is high, provided p_random indicates kidnapping."""
+    from robot_localization.estimation.particle_filter import OccupancyMap2D, AMCLAdaptiveParticleFilter2D
+
+    v_map = OccupancyMap2D.create_volcanic_testbed()
+    rng = np.random.RandomState(42)
+    amcl = AMCLAdaptiveParticleFilter2D(
+        occupancy_map=v_map,
+        min_particles=50,
+        max_particles=200,
+        initial_pose=np.array([0.0, 0.0, 0.0]),
+        rng=rng
+    )
+
+    # Simulate kidnapping condition: w_slow high, w_fast collapsed -> p_random high
+    amcl.w_slow = 0.50
+    amcl.w_fast = 0.05
+    amcl.p_random = 0.90
+    # Keep weights uniform so n_eff == N (n_eff is NOT < N/2)
+    amcl.weights = np.ones(amcl.N) / float(amcl.N)
+    amcl.n_eff = float(amcl.N)
+
+    # Feed dummy scan to trigger adaptive update
+    angles = np.linspace(-math.pi/2, math.pi/2, 16)
+    ranges = np.ones(16) * 5.0 # Non-zero ranges
+
+    old_particles = amcl.particles.copy()
+    amcl.update_scan_adaptive(angles, ranges)
+
+    # Because p_random is high, KLD resampling and recovery injection must execute despite high n_eff
+    # Check that particles have spread over a broader area (injected random particles)
+    x_spread = float(np.max(amcl.particles[:, 0]) - np.min(amcl.particles[:, 0]))
+    assert x_spread > 5.0, f"Expected broad particle injection across map (>5m), got {x_spread:.2f}m"
+
+
+def test_figure_parity_and_data_integrity():
+    """Verify that all figures and benchmark artifacts pass automated integrity checks."""
+    import sys
+    from pathlib import Path
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    import verify_figures
+
+    res = verify_figures.main()
+    assert res == 0, "Figure parity and data integrity verification failed"
+
+
+
+

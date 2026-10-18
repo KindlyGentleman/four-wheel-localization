@@ -148,8 +148,15 @@ class SafeStopSupervisor:
 
             # Check for confirmed standstill
             # Check for confirmed physical standstill from sensor measurements
+            valid_motion_measurement = (
+                not np.isnan(v_measured)
+                and not np.isnan(omega_measured)
+                and not np.isinf(v_measured)
+                and not np.isinf(omega_measured)
+            )
             at_standstill = (
-                abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
+                valid_motion_measurement
+                and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
                 and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
             )
             if at_standstill:
@@ -159,49 +166,89 @@ class SafeStopSupervisor:
                 self.time_in_state = 0.0
 
         elif self.state == SafeStopState.STANDSTILL_HOLD:
-            # Enforce zero motion
-            self.current_v = 0.0
-            self.current_omega = 0.0
+            valid_motion_measurement = (
+                not np.isnan(v_measured)
+                and not np.isnan(omega_measured)
+                and not np.isinf(v_measured)
+                and not np.isinf(omega_measured)
+            )
+            at_standstill = (
+                valid_motion_measurement
+                and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
+                and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
+            )
+            if not at_standstill:
+                # External motion resumed while holding; revoke standstill and engage active braking
+                self.state = SafeStopState.BRAKING
+                self.time_in_state = 0.0
+                self.current_v = v_measured if valid_motion_measurement else 0.0
+                self.current_omega = omega_measured if valid_motion_measurement else 0.0
+                self.consecutive_valid_fixes = 0
+                self.fix_history.clear()
+            else:
+                # Enforce zero motion command
+                self.current_v = 0.0
+                self.current_omega = 0.0
 
-            # Evaluate incoming GNSS fixes
-            if new_gnss_fix is not None:
-                is_valid = self._validate_standstill_fix(t, new_gnss_fix)
-                if is_valid:
-                    self.consecutive_valid_fixes += 1
-                    self.fix_history.append((t, new_gnss_fix.copy()))
-                    if self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes:
-                        # Required M >= 3 consistent fixes verified!
-                        self.state = SafeStopState.VERIFYING_RECOVERY
-                        self.time_in_state = 0.0
-                else:
-                    # Inconsistent or noisy fix; reset verification count
-                    self.consecutive_valid_fixes = 0
-                    self.fix_history.clear()
+                # Evaluate incoming GNSS fixes
+                if new_gnss_fix is not None:
+                    is_valid = self._validate_standstill_fix(t, new_gnss_fix)
+                    if is_valid:
+                        self.consecutive_valid_fixes += 1
+                        self.fix_history.append((t, new_gnss_fix.copy()))
+                        if self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes:
+                            # Required M >= 3 consistent fixes verified!
+                            self.state = SafeStopState.VERIFYING_RECOVERY
+                            self.time_in_state = 0.0
+                    else:
+                        # Inconsistent or noisy fix; reset verification count
+                        self.consecutive_valid_fixes = 0
+                        self.fix_history.clear()
 
         elif self.state == SafeStopState.VERIFYING_RECOVERY:
-            # Maintain standstill while verifying localization convergence
-            self.current_v = 0.0
-            self.current_omega = 0.0
-
-            if new_gnss_fix is not None:
-                is_valid = self._validate_standstill_fix(t, new_gnss_fix)
-                if is_valid:
-                    self.consecutive_valid_fixes += 1
-                    self.fix_history.append((t, new_gnss_fix.copy()))
-                else:
-                    # Drop back to standstill hold if fix fails consistency
-                    self.state = SafeStopState.STANDSTILL_HOLD
-                    self.consecutive_valid_fixes = 0
-                    self.fix_history.clear()
-
-            # Authorize restart once uncertainty drops below safety limit
-            if pos_std <= self.cfg.max_pos_uncertainty_m and self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes:
-                self.state = SafeStopState.RESUMING
+            valid_motion_measurement = (
+                not np.isnan(v_measured)
+                and not np.isnan(omega_measured)
+                and not np.isinf(v_measured)
+                and not np.isinf(omega_measured)
+            )
+            at_standstill = (
+                valid_motion_measurement
+                and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
+                and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
+            )
+            if not at_standstill:
+                # Motion detected during recovery verification; abort and return to braking
+                self.state = SafeStopState.BRAKING
                 self.time_in_state = 0.0
-                self.resumed_at_t = t
-                target_v = min(v_desired, self.cfg.max_resume_speed_m_s)
-                self.current_v = min(target_v, self.cfg.max_resume_accel_m_s2 * dt)
-                self.current_omega = omega_desired * 0.5
+                self.current_v = v_measured if valid_motion_measurement else 0.0
+                self.current_omega = omega_measured if valid_motion_measurement else 0.0
+                self.consecutive_valid_fixes = 0
+                self.fix_history.clear()
+            else:
+                # Maintain standstill command while verifying localization convergence
+                self.current_v = 0.0
+                self.current_omega = 0.0
+
+                if new_gnss_fix is not None:
+                    is_valid = self._validate_standstill_fix(t, new_gnss_fix)
+                    if is_valid:
+                        self.consecutive_valid_fixes += 1
+                        self.fix_history.append((t, new_gnss_fix.copy()))
+                    else:
+                        # Drop back to standstill hold if fix fails consistency
+                        self.state = SafeStopState.STANDSTILL_HOLD
+                        self.consecutive_valid_fixes = 0
+                        self.fix_history.clear()
+
+                # Authorize restart once uncertainty drops below safety limit
+                if pos_std <= self.cfg.max_pos_uncertainty_m and self.consecutive_valid_fixes >= self.cfg.min_consistent_fixes:
+                    self.state = SafeStopState.RESUMING
+                    self.time_in_state = 0.0
+                    self.resumed_at_t = t
+                    target_v = min(v_desired, self.cfg.max_resume_speed_m_s)
+                    self.current_v = min(target_v, self.cfg.max_resume_accel_m_s2 * dt)
+                    self.current_omega = omega_desired * 0.5
 
         elif self.state == SafeStopState.RESUMING:
             # Controlled restart with limited speed and gentle acceleration
@@ -224,11 +271,28 @@ class SafeStopSupervisor:
                 # Re-enter braking if problem reoccurs
                 self.state = SafeStopState.BRAKING
                 self.time_in_state = 0.0
+                self.consecutive_valid_fixes = 0
+                self.fix_history.clear()
 
         self.time_in_state += dt
 
         # Generate human-readable counterfactual annotation
-        is_stopped = (self.state in (SafeStopState.STANDSTILL_HOLD, SafeStopState.VERIFYING_RECOVERY))
+        # is_stopped is True ONLY when in a confirmed stopped state AND verified by sensor measurements
+        valid_motion = (
+            not np.isnan(v_measured)
+            and not np.isnan(omega_measured)
+            and not np.isinf(v_measured)
+            and not np.isinf(omega_measured)
+        )
+        at_standstill_final = (
+            valid_motion
+            and abs(v_measured) < self.cfg.standstill_vel_thresh_m_s
+            and abs(omega_measured) < self.cfg.standstill_omega_thresh_rad_s
+        )
+        is_stopped = (
+            self.state in (SafeStopState.STANDSTILL_HOLD, SafeStopState.VERIFYING_RECOVERY)
+            and at_standstill_final
+        )
         annotation = self._generate_annotation(is_stopped, gnss_age, pos_std)
 
         return SafeStopStatus(

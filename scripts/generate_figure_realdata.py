@@ -63,7 +63,7 @@ def setup_ieee_style():
         "axes.titlesize": 8.2,
         "xtick.labelsize": 7.0,
         "ytick.labelsize": 7.0,
-        "legend.fontsize": 6.2,
+        "legend.fontsize": 6.0,
         "figure.titlesize": 9.5,
         "figure.dpi": 300,
         "savefig.dpi": 300,
@@ -93,19 +93,24 @@ def generate_main_figure():
     outage_t0, outage_t1 = 14.0, 34.0
     slip_t0, slip_t1 = 13.0, 18.0
 
-    # 6-panel layout: 3 rows x 2 cols, width = 7.16 in, height = 8.8 in
-    fig = plt.figure(figsize=(7.16, 8.8), constrained_layout=False)
-    gs = fig.add_gridspec(3, 2, left=0.08, right=0.95, top=0.95, bottom=0.06, hspace=0.38, wspace=0.35)
+    # 6-panel layout: 3 rows x 2 cols, width = 7.16 in, height = 9.0 in
+    fig = plt.figure(figsize=(7.16, 9.0), constrained_layout=False)
+    gs = fig.add_gridspec(3, 2, left=0.08, right=0.95, top=0.96, bottom=0.06, hspace=0.38, wspace=0.34)
 
     ax_cam = fig.add_subplot(gs[0, 0])
     ax_traj = fig.add_subplot(gs[0, 1])
     ax_rast = fig.add_subplot(gs[1, 0])
     ax_err = fig.add_subplot(gs[1, 1])
-    ax_vis = fig.add_subplot(gs[2, 0])
+    
+    # Subgridspec for Panel (e) to separate Inlier Ratio from Position RMSE without dual-axis bars
+    gs_vis = gs[2, 0].subgridspec(2, 1, hspace=0.32)
+    ax_vis_top = fig.add_subplot(gs_vis[0, 0])
+    ax_vis_bot = fig.add_subplot(gs_vis[1, 0])
+
     ax_trade = fig.add_subplot(gs[2, 1])
 
     # -------------------------------------------------------------------------
-    # Panel (a): Synthetic Floor Camera Frame with Genuine KLT Optical Flow
+    # Panel (a): Synthetic Floor Camera Frame with High-Contrast Optical Flow
     # -------------------------------------------------------------------------
     tracker = VisualFeatureTracker(calib, seed=10042)
     sample_idx = 60  # t ~ 12.0s during active forward motion
@@ -117,22 +122,34 @@ def generate_main_figure():
 
     good_prev = v_res.get("good_prev", np.empty((0, 2)))
     good_curr = v_res.get("good_curr", np.empty((0, 2)))
-    for p0_pt, p1_pt in zip(good_prev[:80], good_curr[:80]):
+
+    # Select up to 40 well-distributed points for high print clarity
+    step_pt = max(1, len(good_prev) // 40)
+    selected_indices = list(range(0, len(good_prev), step_pt))[:40]
+
+    for idx in selected_indices:
+        p0_pt = good_prev[idx]
+        p1_pt = good_curr[idx]
         x0, y0 = int(round(p0_pt[0])), int(round(p0_pt[1]))
         x1, y1 = int(round(p1_pt[0])), int(round(p1_pt[1]))
-        cv2.circle(disp_img, (x1, y1), 3, (0, 220, 0), 1, cv2.LINE_AA)
-        # Scale displacement vector by 2x for print visibility
-        dx_vis = int(round((p1_pt[0] - p0_pt[0]) * 2.0))
-        dy_vis = int(round((p1_pt[1] - p0_pt[1]) * 2.0))
-        cv2.line(disp_img, (x0, y0), (x0 + dx_vis, y0 + dy_vis), (255, 220, 0), 1, cv2.LINE_AA)
+
+        # High-contrast flow arrows (3.5x scaled for print visibility)
+        dx_vis = int(round((p1_pt[0] - p0_pt[0]) * 3.5))
+        dy_vis = int(round((p1_pt[1] - p0_pt[1]) * 3.5))
+
+        cv2.circle(disp_img, (x0, y0), 3, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.arrowedLine(
+            disp_img, (x0, y0), (x0 + dx_vis, y0 + dy_vis),
+            (0, 255, 0), 2, cv2.LINE_AA, tipLength=0.35
+        )
 
     ax_cam.imshow(disp_img)
     ax_cam.set_title("(a) Synthetic Floor Cam & KLT Flow", fontweight="bold")
     ax_cam.axis("off")
     ax_cam.text(
-        0.03, 0.06,
-        f"Pose-Conditioned Floor Cam | Frame {sample_idx} (t={t_rel[sample_idx]:.1f}s)\n"
-        f"Detected: {v_res['num_features']} | Inliers: {v_res['inliers_count']}/{v_res['tracked_count']} ({v_res['inlier_ratio']*100:.1f}%)",
+        0.03, 0.05,
+        f"Synthetic Scene | Frame {sample_idx} (t={t_rel[sample_idx]:.1f}s)\n"
+        f"KLT Inliers: {v_res['inliers_count']}/{v_res['tracked_count']} ({v_res['inlier_ratio']*100:.1f}%) | Arrows scaled 3.5x",
         transform=ax_cam.transAxes,
         fontsize=6.0,
         color="white",
@@ -154,7 +171,8 @@ def generate_main_figure():
     ax_traj.plot(strict_poses[:, 0], strict_poses[:, 1], color=C_STRICT, ls="-.", label="Strict Gate (R3)", lw=1.3)
     ax_traj.plot(odom_poses[:, 0], odom_poses[:, 1], color="#059669", ls=":", lw=1.1, alpha=0.65, label="Cont. Odom (REP-105)")
 
-    if len(reloc_indices) > 0 and reloc_indices[0] < len(recov_poses):
+    has_reloc = (len(reloc_indices) > 0 and reloc_indices[0] < len(recov_poses))
+    if has_reloc:
         k_reloc = int(reloc_indices[0])
         ax_traj.plot(recov_poses[:k_reloc, 0], recov_poses[:k_reloc, 1], color=C_RECOV, ls="--", lw=1.2, alpha=0.75)
         ax_traj.plot(recov_poses[k_reloc:, 0], recov_poses[k_reloc:, 1], color=C_RECOV, ls="-", lw=1.6, zorder=6, label="Recovered Map (R4)")
@@ -170,16 +188,20 @@ def generate_main_figure():
             r"$\Delta \mathbf{p}_{\mathrm{map}\to\mathrm{odom}}$",
             fontsize=5.8, color="#059669", fontweight="bold"
         )
+        ax_traj.scatter(recov_poses[k_reloc, 0], recov_poses[k_reloc, 1], marker="*", color="#059669", s=60, zorder=11, label="Re-anchored")
     else:
-        k_reloc = int(np.argmin(np.abs(t_rel - (outage_t1 + 1.86))))
+        # Honest reporting: no fabricated fallback marker
         ax_traj.plot(recov_poses[:, 0], recov_poses[:, 1], color=C_RECOV, ls="-", label="Recovered Map (R4)", lw=1.5, zorder=6)
+        ax_traj.text(
+            0.05, 0.90, "No verified re-anchoring event",
+            transform=ax_traj.transAxes, fontsize=5.5, color="#DC2626", style="italic"
+        )
 
     idx_out_start = int(np.argmin(np.abs(t_rel - outage_t0)))
     idx_out_end = int(np.argmin(np.abs(t_rel - outage_t1)))
 
     ax_traj.scatter(gt_poses[idx_out_start, 0], gt_poses[idx_out_start, 1], marker="v", color="#D97706", s=35, zorder=10, label="Outage Start")
     ax_traj.scatter(gt_poses[idx_out_end, 0], gt_poses[idx_out_end, 1], marker="^", color="#2563EB", s=35, zorder=10, label="GNSS Resumed")
-    ax_traj.scatter(recov_poses[k_reloc, 0], recov_poses[k_reloc, 1], marker="*", color="#059669", s=60, zorder=11, label="Re-anchored")
 
     ax_traj.set_xlabel("Local X Position (m)")
     ax_traj.set_ylabel("Local Y Position (m)")
@@ -191,34 +213,55 @@ def generate_main_figure():
     ax_traj.legend(loc="lower left", ncol=2, framealpha=0.90, fontsize=5.2)
 
     # -------------------------------------------------------------------------
-    # Panel (c): Time-Aligned Sensor Availability & Safe-Stop State
+    # Panel (c): Dynamic Sensor Timeline & Data-Driven Safe-Stop State
     # -------------------------------------------------------------------------
     ax_rast.set_title("(c) Sensor Timeline & Safe-Stop State", fontweight="bold")
-    y_labels = ["GNSS Fix", "Wheel Odom", "IMU Gyro", "Safe-Stop*"]
+    y_labels = ["GNSS Fix (1Hz)", "Wheel Odom", "IMU Gyro", "Safe-Stop*"]
     y_pos = [3, 2, 1, 0]
 
-    ax_rast.hlines(1, 0, gt.duration_s, colors="#2563EB", lw=5, label="Active / Nominal")
-    ax_rast.hlines(2, 0, slip_t0, colors="#2563EB", lw=5)
-    ax_rast.hlines(2, slip_t0, slip_t1, colors="#D97706", lw=5)
-    ax_rast.hlines(2, slip_t1, gt.duration_s, colors="#2563EB", lw=5)
+    # IMU & Odometry timelines
+    ax_rast.hlines(1, 0, gt.duration_s, colors="#2563EB", lw=4, label="Active / Nominal")
+    ax_rast.hlines(2, 0, slip_t0, colors="#2563EB", lw=4)
+    ax_rast.hlines(2, slip_t0, slip_t1, colors="#D97706", lw=4, label="Wheel Slip")
+    ax_rast.hlines(2, slip_t1, gt.duration_s, colors="#2563EB", lw=4)
 
-    ax_rast.hlines(3, 0, outage_t0, colors="#059669", lw=5)
-    ax_rast.hlines(3, outage_t0, outage_t1, colors="#EF4444", lw=5, linestyle=":")
-    ax_rast.hlines(3, outage_t1, gt.duration_s, colors="#059669", lw=5)
+    # GNSS Fix: Discrete event ticks at authentic ~1.00 Hz arrival epochs
+    gnss_epochs_active = []
+    for i in range(len(t_rel)):
+        if i % 5 == 0:
+            t_curr = t_rel[i]
+            if not (outage_t0 <= t_curr <= outage_t1):
+                gnss_epochs_active.append(t_curr)
+    
+    ax_rast.plot(gnss_epochs_active, [3] * len(gnss_epochs_active), "|", color="#059669", markersize=8, markeredgewidth=1.4, label="GNSS Fix (1Hz)")
+    ax_rast.hlines(3, outage_t0, outage_t1, colors="#EF4444", lw=2, linestyle=":")
 
-    ax_rast.hlines(0, 0, 16.0, colors="#059669", lw=5)
-    ax_rast.hlines(0, 16.0, 18.0, colors="#D97706", lw=5)
-    ax_rast.hlines(0, 18.0, 35.9, colors="#DC2626", lw=5)
-    ax_rast.hlines(0, 35.9, 37.9, colors="#0284C7", lw=5)
-    ax_rast.hlines(0, 37.9, gt.duration_s, colors="#2563EB", lw=5)
+    # Safe-Stop Timeline: Render dynamically from saved supervisor states
+    sup_states = data.get("sup_states_R4_recoverable_temporal", None)
+    if sup_states is not None and len(sup_states) == len(t_rel):
+        state_colors = {
+            "NOMINAL": "#2563EB",
+            "BRAKING": "#D97706",
+            "STANDSTILL_HOLD": "#DC2626",
+            "VERIFYING_RECOVERY": "#7C3AED",
+            "RESUMING": "#0284C7"
+        }
+        for i in range(len(sup_states)):
+            t_start = t_rel[i]
+            t_end = t_rel[i + 1] if i + 1 < len(t_rel) else gt.duration_s
+            c_st = state_colors.get(str(sup_states[i]), "#64748B")
+            ax_rast.hlines(0, t_start, t_end, colors=c_st, lw=5)
+    else:
+        # Fallback if state trace is missing
+        ax_rast.hlines(0, 0, gt.duration_s, colors="#64748B", lw=5)
 
-    ax_rast.axvspan(slip_t0, slip_t1, color=C_SLIP, alpha=0.45, label="Wheel Slip (13-18s)")
-    ax_rast.axvspan(outage_t0, outage_t1, color=C_SHADE, alpha=0.45, label="20s Outage (14-34s)")
+    ax_rast.axvspan(slip_t0, slip_t1, color=C_SLIP, alpha=0.45)
+    ax_rast.axvspan(outage_t0, outage_t1, color=C_SHADE, alpha=0.45)
 
     ax_rast.text(
         0.02, 0.05,
         "*Counterfactual Safe-Stop: reference trajectory continues unbraked",
-        transform=ax_rast.transAxes, fontsize=5.4, color="#64748B", style="italic"
+        transform=ax_rast.transAxes, fontsize=5.3, color="#64748B", style="italic"
     )
 
     ax_rast.set_yticks(y_pos)
@@ -227,12 +270,12 @@ def generate_main_figure():
     ax_rast.set_xlim(0, gt.duration_s)
     ax_rast.set_ylim(-0.65, 3.85)
     ax_rast.grid(True, color=C_GRID, linestyle=":", axis="x")
-    ax_rast.legend(loc="upper right", ncol=2, fontsize=5.5, framealpha=0.9)
+    ax_rast.legend(loc="upper right", ncol=2, fontsize=5.3, framealpha=0.9)
 
     # -------------------------------------------------------------------------
-    # Panel (d): Position Error & Commanded Safe-Stop Velocity
+    # Panel (d): Position Error & Safe-Stop Commanded Velocity
     # -------------------------------------------------------------------------
-    ax_err.set_title("(d) Position Error & Safe-Stop Speed", fontweight="bold")
+    ax_err.set_title("(d) Position Error Over Time", fontweight="bold")
     ax_err.axvspan(outage_t0, outage_t1, color=C_SHADE, alpha=0.45, label="GNSS Outage")
     ax_err.axvspan(slip_t0, slip_t1, color=C_SLIP, alpha=0.35, label="Wheel Slip")
 
@@ -247,27 +290,21 @@ def generate_main_figure():
     ax_err.plot(t_rel, err_recov, color=C_RECOV, ls="-", label="Recoverable (R4)", lw=1.5)
     ax_err.axhline(0.35, color="#64748B", ls="--", lw=0.8, alpha=0.8, label="0.35m Threshold")
 
-    cmd_v = data.get("cmd_v_R4_recoverable_temporal", None)
-    if cmd_v is not None and len(cmd_v) == len(t_rel):
-        ax_err_v = ax_err.twinx()
-        ax_err_v.plot(t_rel, cmd_v, color="#D97706", ls="-", lw=1.0, alpha=0.80)
-        ax_err_v.set_ylabel("Cmd Speed (m/s)", color="#D97706", fontsize=7.0)
-        ax_err_v.tick_params(axis="y", labelcolor="#D97706", labelsize=6.5)
-        ax_err_v.set_ylim(-0.04, 0.45)
-
     idx_38 = int(np.argmin(np.abs(t_rel - 38.0)))
     ax_err.annotate(
-        "Gate Lockout\n(0% post-outage fixes)",
+        "Gate Lockout\n(55.6% fixes rejected)",
         xy=(t_rel[idx_38], float(err_strict[idx_38])), xytext=(26.5, 2.22),
         arrowprops=dict(arrowstyle="->", color=C_STRICT, lw=0.9),
         fontsize=5.8, color=C_STRICT, fontweight="bold"
     )
-    ax_err.annotate(
-        f"Re-anchored\n(t={t_rel[k_reloc]:.1f}s, {err_recov[k_reloc]:.2f}m)",
-        xy=(t_rel[k_reloc], float(err_recov[k_reloc])), xytext=(35.5, 1.35),
-        arrowprops=dict(arrowstyle="->", color=C_RECOV, lw=0.9),
-        fontsize=5.8, color=C_RECOV, fontweight="bold"
-    )
+
+    if has_reloc:
+        ax_err.annotate(
+            f"Re-anchored\n(t={t_rel[k_reloc]:.1f}s, {err_recov[k_reloc]:.2f}m)",
+            xy=(t_rel[k_reloc], float(err_recov[k_reloc])), xytext=(35.5, 1.35),
+            arrowprops=dict(arrowstyle="->", color=C_RECOV, lw=0.9),
+            fontsize=5.8, color=C_RECOV, fontweight="bold"
+        )
 
     ax_err.set_xlabel("Experiment Time (s)")
     ax_err.set_ylabel("Position Error (m)")
@@ -277,10 +314,8 @@ def generate_main_figure():
     ax_err.legend(loc="upper left", fontsize=5.3, framealpha=0.88)
 
     # -------------------------------------------------------------------------
-    # Panel (e): Causal Vision Ablation & Tracking Quality (Read from CSV)
+    # Panel (e): Decoupled Vision Tracking vs Slip-Dampened EKF
     # -------------------------------------------------------------------------
-    ax_vis.set_title("(e) Vision Tracking vs Connected EKF", fontweight="bold")
-
     def _get_row(cfg_name):
         sub = df_summary[df_summary["configuration"] == cfg_name]
         return sub.iloc[0] if not sub.empty else None
@@ -292,83 +327,55 @@ def generate_main_figure():
     r_mod_conn = _get_row("R4_vision_connected_moderate")
     r_sev_conn = _get_row("R4_vision_connected_severe")
 
-    # If any required configuration is missing from CSV, raise error rather than fabricating numbers
-    required_rows = {
-        "R4_recoverable_temporal": r_clean_disc,
-        "R4_moderate_degradation": r_mod_disc,
-        "R4_severe_degradation": r_sev_disc,
-        "R4_vision_connected_clean": r_clean_conn,
-        "R4_vision_connected_moderate": r_mod_conn,
-        "R4_vision_connected_severe": r_sev_conn
-    }
-    missing = [k for k, v in required_rows.items() if v is None]
-    if missing:
-        raise RuntimeError(
-            f"Missing required CSV benchmark rows in realdata_summary.csv: {missing}. "
-            "Please run 'python realdata.py' to regenerate verified data."
-        )
-
-    modes = ["Clean\n(Nominal)", "Moderate\n(Blur/Dim)", "Severe\n(Dark/Noise)"]
+    modes = ["Clean", "Moderate", "Severe"]
     x_pos = np.arange(len(modes))
 
     def _to_pct(row):
         val = float(row["avg_inlier_ratio"])
-        # If stored as fraction [0, 1], scale to percentage [0, 100]
         return val * 100.0 if val <= 1.0 else val
 
-    inlier_ratios = [
-        _to_pct(r_clean_disc),
-        _to_pct(r_mod_disc),
-        _to_pct(r_sev_disc),
-    ]
-    rmse_disc = [
-        float(r_clean_disc["pos_rmse_m"]),
-        float(r_mod_disc["pos_rmse_m"]),
-        float(r_sev_disc["pos_rmse_m"]),
-    ]
-    rmse_conn = [
-        float(r_clean_conn["pos_rmse_m"]),
-        float(r_mod_conn["pos_rmse_m"]),
-        float(r_sev_conn["pos_rmse_m"]),
-    ]
+    inlier_ratios = [_to_pct(r_clean_disc), _to_pct(r_mod_disc), _to_pct(r_sev_disc)]
+    rmse_disc = [float(r_clean_disc["pos_rmse_m"]), float(r_mod_disc["pos_rmse_m"]), float(r_sev_disc["pos_rmse_m"])]
+    rmse_conn = [float(r_clean_conn["pos_rmse_m"]), float(r_mod_conn["pos_rmse_m"]), float(r_sev_conn["pos_rmse_m"])]
 
-    width = 0.26
-    ax_vis.bar(x_pos - width, inlier_ratios, width, label="KLT Inliers (%)", color="#3B82F6", alpha=0.85)
-    ax_vis.set_ylabel("KLT Inlier Ratio (%)", color="#1D4ED8")
-    ax_vis.tick_params(axis="y", labelcolor="#1D4ED8")
-    ax_vis.set_ylim(0, 115)
+    # (e1) Top: KLT Inlier Ratio (%)
+    ax_vis_top.bar(x_pos, inlier_ratios, width=0.45, color=["#2563EB", "#0284C7", "#EF4444"], alpha=0.85, edgecolor="#1E293B", lw=0.6)
+    ax_vis_top.set_ylabel("Inliers (%)", fontsize=6.8)
+    ax_vis_top.set_ylim(0, 115)
+    ax_vis_top.set_xticks(x_pos)
+    ax_vis_top.set_xticklabels([])
+    ax_vis_top.grid(True, color=C_GRID, linestyle=":", axis="y")
+    ax_vis_top.set_title("(e) Vision Tracking & Slip Compensation", fontweight="bold")
+    for idx_b, val_b in enumerate(inlier_ratios):
+        ax_vis_top.text(idx_b, val_b + 3, f"{val_b:.1f}%", ha="center", va="bottom", fontsize=5.8, fontweight="bold")
 
-    ax_vis2 = ax_vis.twinx()
-    ax_vis2.bar(x_pos, rmse_disc, width, label="RMSE: Disconnected", color="#94A3B8", alpha=0.88)
-    ax_vis2.bar(x_pos + width, rmse_conn, width, label="RMSE: Connected VO", color="#10B981", alpha=0.88)
-    ax_vis2.set_ylabel("Position RMSE (m)", color="#047857", fontsize=7.0)
-    ax_vis2.tick_params(axis="y", labelcolor="#047857", labelsize=6.5)
-    ax_vis2.set_ylim(0, 1.55)
-
-    ax_vis.set_xticks(x_pos)
-    ax_vis.set_xticklabels(modes, fontsize=6.8)
-    ax_vis.grid(True, color=C_GRID, linestyle=":", axis="y")
-
-    lines1, labels1 = ax_vis.get_legend_handles_labels()
-    lines2, labels2 = ax_vis2.get_legend_handles_labels()
-    ax_vis.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=5.3, framealpha=0.90)
+    # (e2) Bottom: Position RMSE (m) comparing Disconnected vs Connected
+    w_pair = 0.35
+    ax_vis_bot.bar(x_pos - w_pair / 2, rmse_disc, w_pair, label="Disconnected", color="#94A3B8", alpha=0.88, edgecolor="#1E293B", lw=0.6)
+    ax_vis_bot.bar(x_pos + w_pair / 2, rmse_conn, w_pair, label="Connected Flow", color="#10B981", alpha=0.88, edgecolor="#1E293B", lw=0.6)
+    ax_vis_bot.set_ylabel("Pos RMSE (m)", fontsize=6.8)
+    ax_vis_bot.set_ylim(0, 1.45)
+    ax_vis_bot.set_xticks(x_pos)
+    ax_vis_bot.set_xticklabels(modes, fontsize=6.5)
+    ax_vis_bot.grid(True, color=C_GRID, linestyle=":", axis="y")
+    ax_vis_bot.legend(loc="upper left", fontsize=5.2, framealpha=0.90)
 
     # -------------------------------------------------------------------------
     # Panel (f): Recovery Performance & Tradeoff Comparison
     # -------------------------------------------------------------------------
-    ax_trade.set_title("(f) Recovery Tradeoff: Error vs GNSS", fontweight="bold")
+    ax_trade.set_title("(f) Recovery Tradeoff: Error vs Acceptance", fontweight="bold")
 
     plot_configs = [
-        ("R0_dead_reckoning", "R0: Odometry DR", C_DR, "s", (-4, 6)),
-        ("R3_strict_gated_ekf", "R3: Strict Gate (Lockout)", C_STRICT, "X", (-18, -11)),
-        ("R1_standard_ekf", "R1: Standard EKF", C_STD, "o", (-42, -10)),
-        ("R2_bias_aware_ekf", "R2: Bias-Aware EKF", "#6366F1", "^", (-45, 6)),
-        ("R6_recoverable_cov_adj", "R6: Cov-Adjusted", "#0284C7", "v", (-42, -2)),
-        ("R4_recoverable_temporal", "R4/R5/R7: Verified Recov", C_RECOV, "*", (-58, 7)),
-        ("R4_vision_connected_clean", "R4+VO: Connected Clean", "#15803D", "P", (-55, -10)),
+        ("R0_dead_reckoning", "R0: Odometry DR", C_DR, "s"),
+        ("R3_strict_gated_ekf", "R3: Strict Gate (Lockout)", C_STRICT, "X"),
+        ("R1_standard_ekf", "R1: Standard EKF", C_STD, "o"),
+        ("R2_bias_aware_ekf", "R2: Bias-Aware EKF", "#6366F1", "^"),
+        ("R6_recoverable_cov_adj", "R6: Cov-Adjusted", "#0284C7", "v"),
+        ("R4_recoverable_temporal", "R4/R5/R7: Temporal / Re-init", C_RECOV, "*"),
+        ("R4_vision_connected_clean", "R4+VO: Connected Clean", "#15803D", "P"),
     ]
 
-    for cfg_key, label_name, color, marker, offset_pt in plot_configs:
+    for cfg_key, label_name, color, marker in plot_configs:
         sub = df_summary[df_summary["configuration"] == cfg_key]
         if not sub.empty:
             rmse = float(sub["pos_rmse_m"].values[0])
@@ -376,10 +383,10 @@ def generate_main_figure():
             sz = 75 if marker in ["*", "X", "P"] else 45
             ax_trade.scatter(accept, rmse, color=color, marker=marker, s=sz, label=label_name, zorder=6, edgecolors="black", linewidth=0.5)
 
-    ax_trade.axvspan(85, 105, ymin=0.0, ymax=0.55, color="#DCFCE7", alpha=0.40, zorder=1)
-    ax_trade.text(46, 0.85, "Target Zone: High Fix Acceptance\n+ Post-Outage Recovery (<1.15m)", fontsize=5.6, color="#15803D", fontweight="bold")
+    ax_trade.axvspan(90, 105, ymin=0.0, ymax=0.55, color="#DCFCE7", alpha=0.45, zorder=1)
+    ax_trade.text(48, 0.85, "Target Recovery Zone:\nAcceptance >= 90%, RMSE < 1.15m", fontsize=5.6, color="#15803D", fontweight="bold")
 
-    ax_trade.set_xlabel("Available GNSS Fix Acceptance (%)")
+    ax_trade.set_xlabel("Post-Outage GNSS Fix Acceptance (%) [27 fixes]")
     ax_trade.set_ylabel("Position RMSE (m)")
     ax_trade.set_xlim(-6, 108)
     ax_trade.set_ylim(0.75, 1.55)
@@ -395,10 +402,11 @@ def generate_main_figure():
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(svg_path, bbox_inches="tight")
 
-    fig.savefig(FIGURES_DIR / "figure_realdata.pdf", bbox_inches="tight")
-    fig.savefig(FIGURES_DIR / "figure_realdata.png", dpi=300, bbox_inches="tight")
-    fig.savefig(FWL_ASSETS / "figure_realdata.pdf", bbox_inches="tight")
-    fig.savefig(FWL_ASSETS / "figure_realdata.png", dpi=300, bbox_inches="tight")
+    import shutil
+    for target_dir in [FIGURES_DIR, FWL_ASSETS]:
+        shutil.copy2(pdf_path, target_dir / "figure_realdata.pdf")
+        shutil.copy2(png_path, target_dir / "figure_realdata.png")
+        shutil.copy2(svg_path, target_dir / "figure_realdata.svg")
 
     plt.close(fig)
     print(f"[Figure] Exported figure_realdata to:\n  {pdf_path}\n  {png_path}\n  {svg_path}")

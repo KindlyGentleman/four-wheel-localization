@@ -293,9 +293,15 @@ def evaluate_recovery_events(
             "event_details": []
         }
 
+    total_events = len(recovery_events)
+    evaluated_events = 0
+    invalid_events = 0
     true_rec = 0
     false_rec = 0
     details = []
+
+    t_min = float(np.min(gt_timestamps))
+    t_max = float(np.max(gt_timestamps))
 
     for ev in recovery_events:
         t_ev = getattr(ev, "timestamp", None)
@@ -307,8 +313,25 @@ def evaluate_recovery_events(
             post_pos = ev.get("post_pos")
 
         if t_ev is None or post_pos is None:
+            invalid_events += 1
             continue
 
+        if t_ev < t_min or t_ev > t_max:
+            # Event timestamp is outside the ground truth support domain; cannot interpolate
+            invalid_events += 1
+            details.append({
+                "timestamp": t_ev,
+                "strategy": getattr(ev, "strategy", ev.get("strategy") if isinstance(ev, dict) else "unknown"),
+                "post_pos": np.asarray(post_pos)[:2].tolist() if post_pos is not None else None,
+                "gt_pos": None,
+                "post_error_m": float("nan"),
+                "is_true_recovery": False,
+                "is_valid": False,
+                "rejection_reason": "timestamp_outside_ground_truth_domain"
+            })
+            continue
+
+        evaluated_events += 1
         gt_x = float(np.interp(t_ev, gt_timestamps, gt_positions[:, 0]))
         gt_y = float(np.interp(t_ev, gt_timestamps, gt_positions[:, 1]))
         gt_pt = np.array([gt_x, gt_y])
@@ -327,14 +350,17 @@ def evaluate_recovery_events(
             "post_pos": np.asarray(post_pos)[:2].tolist(),
             "gt_pos": gt_pt.tolist(),
             "post_error_m": post_err,
-            "is_true_recovery": is_true
+            "is_true_recovery": is_true,
+            "is_valid": True
         })
 
     return {
-        "total_recoveries": len(recovery_events),
+        "total_recoveries": total_events,
+        "evaluated_events": evaluated_events,
+        "invalid_events": invalid_events,
         "true_recoveries": true_rec,
         "false_recoveries": false_rec,
-        "status": "verified",
+        "status": "verified" if evaluated_events > 0 else ("all_invalid" if invalid_events > 0 else "no_recoveries"),
         "event_details": details
     }
 

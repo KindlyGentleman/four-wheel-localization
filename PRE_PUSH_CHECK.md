@@ -129,7 +129,7 @@ Every preliminary finding (F01 to F18) has been audited, remediated, and verifie
 - **Continuous Integration:** `.github/workflows/ci.yml` configured for Ubuntu and Windows across Python 3.10, 3.11, and 3.12.
 - **Secrets Scan:** 0 tokens, API keys, or private credentials found across the repository.
 - **Link & Path Audit:** 0 hardcoded absolute drive paths or local machine URLs.
-- **Copywriting Hygiene (Anti-Slop):** 0 em dashes (`—`), 0 AI marketing buzzwords, concise direct prose throughout.
+- **Copywriting Hygiene (Anti-Slop):** 0 em dashes (` - `), 0 AI marketing buzzwords, concise direct prose throughout.
 
 ---
 

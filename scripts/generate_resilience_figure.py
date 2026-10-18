@@ -129,26 +129,31 @@ def generate_figure():
     for wx, wy, label in [(-0.18, 0.19, "RL"), (0.18, 0.19, "FL"), (-0.18, -0.25, "RR"), (0.18, -0.25, "FR")]:
         wh = patches.Rectangle((wx - wheel_w / 2, wy), wheel_w, wheel_h, linewidth=1.0, edgecolor="#1E293B", facecolor="#334155", zorder=3)
         ax_a.add_patch(wh)
-        ax_a.text(wx, wy + (0.08 if wy > 0 else -0.04), label, ha="center", va="center", fontsize=6, fontweight="bold", color="#334155")
+        ax_a.text(wx, wy + (0.07 if wy > 0 else -0.04), label, ha="center", va="center", fontsize=6.2, fontweight="bold", color="#334155")
+
+    # Forward direction indicator
+    ax_a.annotate("", xy=(0.36, 0.0), xytext=(0.25, 0.0),
+                  arrowprops=dict(arrowstyle="->", color="#1E293B", lw=1.4))
+    ax_a.text(0.38, 0.0, "+X_fwd", ha="left", va="center", fontsize=5.8, fontweight="bold", color="#1E293B")
 
     ax_a.plot(0, 0, marker="o", markersize=4, color="#DC2626", zorder=5)
-    ax_a.annotate("base_link", xy=(0, 0), xytext=(-0.21, 0.06), fontsize=6.5, fontweight="bold",
+    ax_a.annotate("base_link (0,0)", xy=(0, 0), xytext=(-0.24, 0.06), fontsize=6.3, fontweight="bold",
                   arrowprops=dict(arrowstyle="->", color="#DC2626", lw=0.8))
 
     ax_a.plot(0.05, 0.0, marker="^", markersize=6, color="#0284C7", zorder=5)
-    ax_a.annotate("GNSS (lx=0.05m)", xy=(0.05, 0.0), xytext=(-0.05, -0.13), fontsize=6.2, color="#0284C7",
+    ax_a.annotate("GNSS (lx=0.05m)", xy=(0.05, 0.0), xytext=(-0.05, -0.12), fontsize=6.0, color="#0284C7",
                   arrowprops=dict(arrowstyle="->", color="#0284C7", lw=0.8))
 
     ax_a.plot(0.20, 0.0, marker="s", markersize=6, color=C_VO, zorder=5)
-    fov_pts = np.array([[0.20, 0.0], [0.55, 0.26], [0.55, -0.26]])
+    fov_pts = np.array([[0.20, 0.0], [0.55, 0.24], [0.55, -0.24]])
     fov_cone = patches.Polygon(fov_pts, closed=True, facecolor=C_VO, alpha=0.15, edgecolor=C_VO, linestyle="--", lw=0.8)
     ax_a.add_patch(fov_cone)
-    ax_a.text(0.41, 0.0, "Stereo FOV\n(B=0.10m)", ha="center", va="center", fontsize=5.8, color=C_VO)
+    ax_a.text(0.40, 0.0, "Stereo FOV\n(B=0.10m)", ha="center", va="center", fontsize=5.6, color=C_VO)
 
     ax_a.plot([-0.18, 0.18], [0.33, 0.33], color="#64748B", lw=0.9)
     ax_a.plot([-0.18, -0.18], [0.31, 0.35], color="#64748B", lw=0.9)
     ax_a.plot([0.18, 0.18], [0.31, 0.35], color="#64748B", lw=0.9)
-    ax_a.text(0.0, 0.37, "Wheelbase L = 0.50m", ha="center", va="center", fontsize=6, color="#64748B")
+    ax_a.text(0.0, 0.37, "Wheelbase L = 0.50m | Track B = 0.55m", ha="center", va="center", fontsize=5.8, color="#64748B")
 
     # -------------------------------------------------------------------------
     # Panel (b): Sensor Availability & Health Timeline under Combined Stress
@@ -160,19 +165,21 @@ def generate_figure():
     ax_b.axvspan(5.0, 15.0, color="#FEF3C7", alpha=0.6, label="Asymmetric Slip")
     ax_b.axvspan(15.0, 35.0, color=C_SHADE, alpha=0.6, label="GNSS Blackout")
 
-    sensors = ["Wheel Encoders", "MPU-9250 Gyro", "Stereo Camera", "GNSS Fix"]
+    sensors = ["Wheel Encoders", "MPU-9250 Gyro", "Stereo Camera", "GNSS Fix (1Hz)"]
     y_pos = [3, 2, 1, 0]
 
     stat_wheel = np.ones_like(t_timeline)
     stat_gyro = np.ones_like(t_timeline)
     stat_stereo = np.ones_like(t_timeline)
-    stat_gnss = np.ones_like(t_timeline)
-    stat_gnss[(t_timeline >= 15.0) & (t_timeline <= 35.0)] = 0.0
 
     ax_b.step(t_timeline, stat_wheel + y_pos[0] * 0.8, color="#1E293B", lw=1.2, where="post")
     ax_b.step(t_timeline, stat_gyro + y_pos[1] * 0.8, color="#2563EB", lw=1.2, where="post")
     ax_b.step(t_timeline, stat_stereo + y_pos[2] * 0.8, color=C_VO, lw=1.2, where="post")
-    ax_b.step(t_timeline, stat_gnss + y_pos[3] * 0.8, color="#0D9488", lw=1.2, where="post")
+
+    # GNSS: Authentic discrete 1 Hz fixes with outage gap
+    gnss_times = [t for t in np.arange(0.0, 40.5, 1.0) if not (15.0 <= t <= 35.0)]
+    ax_b.plot(gnss_times, [y_pos[3] * 0.8 + 0.5] * len(gnss_times), "|", color="#0D9488", markersize=7, markeredgewidth=1.3, label="1 Hz Fixes")
+    ax_b.plot([15.0, 35.0], [y_pos[3] * 0.8 + 0.5, y_pos[3] * 0.8 + 0.5], ":", color="#DC2626", lw=1.8, label="Outage")
 
     ax_b.set_yticks([y * 0.8 + 0.5 for y in y_pos])
     ax_b.set_yticklabels(sensors, fontsize=6.5)
